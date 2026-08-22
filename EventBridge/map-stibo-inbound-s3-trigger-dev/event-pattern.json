@@ -1,0 +1,22 @@
+{
+    "source": [
+        "aws.s3"
+    ],
+    "detail-type": [
+        "Object Created"
+    ],
+    "detail": {
+        "bucket": {
+            "name": [
+                "map-stibo-inbound-raw-dev"
+            ]
+        },
+        "object": {
+            "key": [
+                {
+                    "prefix": "raw/metadata/"
+                }
+            ]
+        }
+    }
+}

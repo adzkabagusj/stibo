@@ -1,0 +1,14 @@
+[
+    {
+        "Id": "map-stibo-inbound-validate-transform-dev",
+        "Arn": "arn:aws:lambda:ap-southeast-3:590184096617:function:map-stibo-inbound-validate-transform-dev",
+        "TargetType": "AWS::Lambda::Function",
+        "InputType": "Matched event",
+        "Role": "Amazon_EventBridge_Invoke_Lambda_7078205627",
+        "DeadLetterConfig": null,
+        "RetryPolicy": {
+            "MaximumRetryAttempts": 185,
+            "MaximumEventAgeInSeconds": 86400
+        }
+    }
+]

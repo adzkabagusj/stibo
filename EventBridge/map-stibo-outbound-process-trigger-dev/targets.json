@@ -1,0 +1,62 @@
+[
+    {
+        "Id": "map-stibo-outbound-transform-pos-dev",
+        "Arn": "arn:aws:lambda:ap-southeast-3:590184096617:function:map-stibo-outbound-transform-pos-dev",
+        "TargetType": "AWS::Lambda::Function",
+        "InputType": "Matched event",
+        "Role": "Amazon_EventBridge_Invoke_Lambda_1436227558",
+        "DeadLetterConfig": null,
+        "RetryPolicy": {
+            "MaximumRetryAttempts": 185,
+            "MaximumEventAgeInSeconds": 86400
+        }
+    },
+    {
+        "Id": "map-stibo-outbound-transform-by-dev",
+        "Arn": "arn:aws:lambda:ap-southeast-3:590184096617:function:map-stibo-outbound-transform-by-dev",
+        "TargetType": "AWS::Lambda::Function",
+        "InputType": "Matched event",
+        "Role": "Amazon_EventBridge_Invoke_Lambda_1031980767",
+        "DeadLetterConfig": null,
+        "RetryPolicy": {
+            "MaximumRetryAttempts": 185,
+            "MaximumEventAgeInSeconds": 86400
+        }
+    },
+    {
+        "Id": "map-stibo-outbound-transform-sql-dev",
+        "Arn": "arn:aws:lambda:ap-southeast-3:590184096617:function:map-stibo-outbound-transform-sql-dev",
+        "TargetType": "AWS::Lambda::Function",
+        "InputType": "Matched event",
+        "Role": "Amazon_EventBridge_Invoke_Lambda_1784258368",
+        "DeadLetterConfig": null,
+        "RetryPolicy": {
+            "MaximumRetryAttempts": 185,
+            "MaximumEventAgeInSeconds": 86400
+        }
+    },
+    {
+        "Id": "map-stibo-outbound-transform-sap-dev",
+        "Arn": "arn:aws:lambda:ap-southeast-3:590184096617:function:map-stibo-outbound-transform-sap-dev",
+        "TargetType": "AWS::Lambda::Function",
+        "InputType": "Matched event",
+        "Role": "Amazon_EventBridge_Invoke_Lambda_651391147",
+        "DeadLetterConfig": null,
+        "RetryPolicy": {
+            "MaximumRetryAttempts": 185,
+            "MaximumEventAgeInSeconds": 86400
+        }
+    },
+    {
+        "Id": "map-stibo-outbound-transform-gtech-dev",
+        "Arn": "arn:aws:lambda:ap-southeast-3:590184096617:function:map-stibo-outbound-transform-gtech-dev",
+        "TargetType": "AWS::Lambda::Function",
+        "InputType": "Matched event",
+        "Role": "Amazon_EventBridge_Invoke_Lambda_1641913118",
+        "DeadLetterConfig": null,
+        "RetryPolicy": {
+            "MaximumRetryAttempts": 185,
+            "MaximumEventAgeInSeconds": 86400
+        }
+    }
+]

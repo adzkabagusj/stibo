@@ -1,0 +1,50 @@
+# This AWS SAM template has been generated from your function's configuration.
+# If your function has one or more triggers, note that the AWS resources
+# associated with these triggers aren't fully specified in this template and
+# include placeholder values. Open this template in AWS Infrastructure Composer
+# or your favorite IDE and modify it to specify a serverless application with
+# other AWS resources.
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: An AWS Serverless Application Model (SAM) template describing your function.
+Resources:
+  mapstiboinboundvalidatetransformdev:
+    Type: AWS::Serverless::Function
+    Properties:
+      Architectures:
+        - arm64
+      CodeUri: ./src
+      Description: ''
+      Environment:
+        Variables:
+          PROCESSED_BUCKET: map-stibo-inbound-processed-dev
+          RAW_BUCKET: map-stibo-inbound-raw-dev
+      EphemeralStorage:
+        Size: 1024
+      Handler: router.lambda_handler
+      Layers:
+        - arn:aws:lambda:ap-southeast-3:590184096617:layer:stibo-python-layer:5
+        - >-
+          arn:aws:lambda:ap-southeast-3:590184096617:layer:stibo-msal-python-layer:1
+      LoggingConfig:
+        LogFormat: Text
+        LogGroup: MAP-STIBO-DEV
+      MemorySize: 1024
+      PackageType: Zip
+      RecursiveLoop: Terminate
+      Runtime: python3.14
+      RuntimeManagementConfig:
+        UpdateRuntimeOn: Auto
+      SnapStart:
+        ApplyOn: None
+      Tags: {}
+      Timeout: 900
+      Tracing: PassThrough
+      VpcConfig:
+        Ipv6AllowedForDualStack: false
+        SecurityGroupIds:
+          - sg-0fa1a23260500f15d
+        SubnetIds:
+          - subnet-03e680cee12e74081
+          - subnet-0bfdf2788c2bd63be
+      Role: arn:aws:iam::590184096617:role/MAP-STIBO-Lambda-Role

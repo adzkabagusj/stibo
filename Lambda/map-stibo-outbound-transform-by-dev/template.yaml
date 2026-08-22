@@ -1,0 +1,81 @@
+# This AWS SAM template has been generated from your function's configuration.
+# If your function has one or more triggers, note that the AWS resources
+# associated with these triggers aren't fully specified in this template and
+# include placeholder values. Open this template in AWS Infrastructure Composer
+# or your favorite IDE and modify it to specify a serverless application with
+# other AWS resources.
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: An AWS Serverless Application Model (SAM) template describing your function.
+Resources:
+  mapstibooutboundtransformbydev:
+    Type: AWS::Serverless::Function
+    Properties:
+      Architectures:
+        - arm64
+      CodeUri: ./src
+      Description: ''
+      Environment:
+        Variables:
+          BY_GENERIC_PARENT_ID: PPH_F-TempSubCat
+          ENTRA_CLIENT_ID: 2d10387f-c19d-43e8-84f3-998e06688f4b
+          OUTPUT_BUCKET: map-stibo-outbound-dev
+          STIBO_CONTEXT_ID: Context1
+          BY_STIBO_XML_OUTPUT_PREFIX: stibo-response/blueyonder/
+          DB_NAME: STIBO_Dev
+          MAPPING_BUCKET: map-stibo-outbound-dev
+          STIBO_CLIENT_SECRET: lIrkcJwwt3FVqUJ1F8P51cYyruTE3tKq
+          OUTPUT_PREFIX: transformed/blueyonder/
+          BY_STIBO_XML_OUTPUT_BUCKET: map-stibo-outbound-dev
+          MB_STIBO_XML_OUTPUT_PREFIX: stibo-response/blueyonder/musicalbox/
+          XML_ARCHIVE_PREFIX: xml-archive/blueyonder/
+          STIBO_GRANT_TYPE: client_credentials
+          SFTP_REMOTE_DIR: /Inbound/Blueyonder_Dev
+          INBOUND_PREFIX: response/blueyonder/
+          MAPPING_SHEET: BY Assortment Tempelate
+          ODBCSYSINI: /opt
+          ENTRA_TENANT_ID: 45390c88-1ba9-479f-98a5-868a00347156
+          MAPPING_KEY_BY_TO_STIBO: Mapping (40 - BY Tools to Stibo).xlsx
+          XML_ARCHIVE_BUCKET: map-stibo-outbound-dev
+          MAA_STIBO_SECRET_MANAGER: MAA-STIBO-App
+          DB_SERVER: 10.221.44.10
+          STIBO_CLIENT_ID: AP-IIEP
+          DB_TABLE_NAME: SB_BY_AssortmentTemplate_Temp
+          MAPPING_KEY: Mapping (48 - Stibo to SQL (Outbound Article)).xlsx
+          BY_RESPONSE_PREFIX: response/blueyonder/
+          DB_TABLE_SCHEMA: dbo
+          PREFIX: step-export/blueyonder/
+          STIBO_WORKSPACE_ID: Main
+          STIBO_ENDPOINT_BY: >-
+            https://mapactive-dev.mdm.stibosystems.com/restapiv2/inbound-integration-endpoints/IIEP_BYToolsResponse/upload-direct?fileName=Send.xml&context=Context1&workspace=Main
+          ARTICLE_ID_MODE: direct
+          STIBO_TOKEN_URL: >-
+            https://auth-jaea01.mdm.stibosystems.com/auth/realms/mapactive-dev/protocol/openid-connect/token
+      EphemeralStorage:
+        Size: 512
+      Handler: lambda_function.lambda_handler
+      Layers:
+        - arn:aws:lambda:ap-southeast-3:590184096617:layer:stibo-python-layer:5
+        - arn:aws:lambda:ap-southeast-3:590184096617:layer:stibo-paramiko-sftp:1
+      LoggingConfig:
+        LogFormat: Text
+        LogGroup: MAP-STIBO-DEV
+      MemorySize: 512
+      PackageType: Zip
+      RecursiveLoop: Terminate
+      Runtime: python3.14
+      RuntimeManagementConfig:
+        UpdateRuntimeOn: Auto
+      SnapStart:
+        ApplyOn: None
+      Tags: {}
+      Timeout: 300
+      Tracing: PassThrough
+      VpcConfig:
+        Ipv6AllowedForDualStack: false
+        SecurityGroupIds:
+          - sg-0fa1a23260500f15d
+        SubnetIds:
+          - subnet-03e680cee12e74081
+          - subnet-0bfdf2788c2bd63be
+      Role: arn:aws:iam::590184096617:role/MAP-STIBO-Lambda-Role

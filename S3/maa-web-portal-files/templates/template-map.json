@@ -1,0 +1,477 @@
+{
+  "ADIDAS": {
+    "Inline": {
+      "Line List": [
+        {
+          "file": "line_list_multi.xlsx",
+          "sheet": "Sheet1"
+        },
+        {
+          "file": "line_list_mono.xlsx",
+          "sheet": "Sheet1"
+        }
+      ],
+      "Backlog": {
+        "file": "backlog.xlsx",
+        "sheet": "Backlog"
+      },
+      "TDD & Price List": {
+        "file": "tdd_price_list.xlsx",
+        "sheet": "Spreadsheet"
+      },
+      "DTB": {
+        "file": "Adidas_DTB.xlsx",
+        "sheet": "English"
+      }
+    }
+  },
+  "NEW BALANCE": {
+    "Inline": {
+      "Line List (Apparel & Accessories)": "line_list_apparel_accessories.xlsx",
+      "Line List (Footwear)": "line_list_footwear.xlsx",
+      "EAN Source": "New_balance_EAN.xlsx",
+      "Ecommerce File": "ecommerce_file.xlsx",
+      "Eommerce File": "ecommerce_file.xlsx"
+    },
+    "Licensed": {
+      "Line List": "line_list.xlsx",
+      "Order Sheet": "New_Balance_Licensed_OrderSheet.xlsx",
+      "Ecommerce File": "ecommerce_file.xlsx"
+    }
+  },
+  "DIADORA": {
+    "Inline": {
+      "Price List": "price_list.xlsx",
+      "EAN Source": null
+    },
+    "Licensed": {
+      "Recap Sample": {
+        "file": "Recap_Sample_Diadora.xlsx",
+        "sheet": "DIA"
+      },
+      "Recap Sample 2nd Ingestion": {
+        "file": "Recap_Sample_Diadora_2nd_Ingestion.xlsx",
+        "sheet": "DIA"
+      }
+    }
+  },
+  "SMIGGLE": {
+    "Inline": {
+      "Linelist": "linelist.xlsx",
+      "Packing List": "packing_list.xlsx",
+      "Ecommerce File": "ecommerce_file.xlsx"
+    }
+  },
+  "ALDO": {
+    "Inline": {
+      "Line list": {
+        "file": "line_list.xlsm",
+        "sheet": "MainSheet"
+      },
+      "OOR": "oor.xlsx",
+      "Ecommerce File": "ecommerce_file.xlsx"
+    }
+  },
+  "2XU": {
+    "Inline": {
+      "Order Confirmation": {
+        "file": "Order Confirmation.xlsx",
+        "sheet": "Rep9534.tmp"
+      },
+      "Product Bible": [
+        {
+          "file": "Product Bible.xlsx",
+          "sheet": "H1 27 SKU List_by Garment Type"
+        },
+        {
+          "file": "Product Bible.xlsx",
+          "sheet": "H1 27 Catalogue Copy_WIP"
+        }
+      ],
+      "Product Bible Wholesale": [
+        {
+          "file": "Product Bible.xlsx",
+          "sheet": "H1 27 SKU List_by Garment Type"
+        },
+        {
+          "file": "Product Bible.xlsx",
+          "sheet": "H1 27 Catalogue Copy_WIP"
+        }
+      ]
+    }
+  },
+  "CROCS": {
+    "Inline": {
+      "Line List": [
+        {
+          "file": "H1 27 SEA Line List - SEA (5.15).xlsx",
+          "sheet": "ACC (exclude BRN & MM)"
+        },
+        {
+          "file": "H1 27 SEA Line List - SEA (5.15).xlsx",
+          "sheet": "Charms"
+        },
+        {
+          "file": "H1 27 SEA Line List - SEA (5.15).xlsx",
+          "sheet": "FTW"
+        }
+      ],
+      "Order Form JBZ": [
+        {
+          "file": "JBZ Order form.xlsx",
+          "sheet": "SP WHS",
+          "headerRow": 10
+        },
+        {
+          "file": "JBZ Order form.xlsx",
+          "sheet": "KS",
+          "headerRow": 10
+        }
+      ],
+      "Order Form FW": [
+        {
+          "file": "FW Order Form.xlsx",
+          "sheet": "SP",
+          "headerRow": 10
+        },
+        {
+          "file": "FW Order Form.xlsx",
+          "sheet": "WHS",
+          "headerRow": 10
+        },
+        {
+          "file": "FW Order Form.xlsx",
+          "sheet": "KS",
+          "headerRow": 10
+        }
+      ],
+      "Order Form ACCs BAG": [
+        {
+          "file": "ACCs BAG Order Form.xlsx",
+          "sheet": "ACCs",
+          "headerRow": 10
+        },
+        {
+          "file": "ACCs BAG Order Form.xlsx",
+          "sheet": "BAG",
+          "headerRow": 10
+        }
+      ],
+      "Shipment Confirmation": {
+        "file": "Shipment Confirmation - Early Ready (Jan orders) (12122025).xlsx",
+        "sheet": "DEtails"
+      }
+    }
+  },
+  "CLARKS": {
+    "Inline": {
+      "RAW Order Form Clarks Accs SS27": {
+        "file": "RAW Order Form Clarks Accs SS27.xlsx",
+        "sheet": "Order Form"
+      },
+      "RAW Order Form Clarks Footwear SS27": {
+        "file": "RAW Order Form Clarks Footwear SS27.xlsx",
+        "sheet": "SEA Order Form ",
+        "headerRow": 9
+      },
+      "RAW Delivery Performance Clarks Footwear & Accs": {
+        "file": "RAW Delivery Performance Clarks Footwear & Accs.xlsx",
+        "sheet": "Delivery Performance",
+        "headerRow": 4
+      }
+    }
+  },
+  "ON RUNNING": {
+    "Inline": {
+      "Linesheet Footwear Planet Sports": "Linelist Footwear Planet Sports.xlsx",
+      "Linesheet Footwear TAF": "Linelist Footwear TAF.xlsx",
+      "Packaging list Planet Sport": "Packaging List Planet Sport.xlsx",
+      "Packaging List TAF": "Packaging List TAF.xlsx"
+    }
+  },
+  "LOTTO": {
+    "Inline": {
+      "Order Form": "Order_Form.xlsm",
+      "FOB Order": {
+        "file": "FOB_Order_Form.xlsm",
+        "sheet": "WGSFL1"
+      },
+      "Price List": "PriceList.xlsx"
+    },
+    "Licensed": {
+      "Recap Sample": {
+        "file": "Recap_Sample_Lotto.xlsx",
+        "sheet": "LOT"
+      },
+      "Recap Sample 2nd Ingestion": {
+        "file": "Recap_Sample_Lotto_2nd_Ingestion.xlsx",
+        "sheet": "LOT"
+      }
+    }
+  },
+  "NIKE": {
+    "Inline": {
+      "Line List 360 EAN": "Linelist 360.xlsx",
+      "Line List 360 Article Planning": "Linelist 360.xlsx",
+      "LineList": "Linelist.xlsx",
+      "Order Confirmation": "Order Confirmation.xlsx",
+      "LineList Rookie": "Rookie Linelist.xlsx"
+    }
+  },
+  "DR. MARTENS": {
+    "Inline": {
+      "Retail Price Master": "Retail_Price_Master.xlsx",
+      "EAN Source": "EAN_Source.xlsx"
+    }
+  },
+  "BIRKENSTOCK": {
+    "Inline": {
+      "OFS-FC-PT Mitra-SS27": "OFS-FC-PT Mitra-SS27.xlsx",
+      "OOR": "OOR.xlsx"
+    }
+  },
+  "PAZZION": {
+    "Inline": {
+      "Barcode": {
+        "file": "CI1167 barcode.xlsx",
+        "sheet": "Sheet"
+      },
+      "Order Form": [
+        {
+          "file": "IDM - Spring Summer'26 Order Form.xlsx",
+          "sheet": "SS'26",
+          "headerRow": 5
+        },
+        {
+          "file": "IDM - Spring Summer'26 Order Form.xlsx",
+          "sheet": "Styles Selected in Wisma",
+          "headerRow": 3
+        },
+        {
+          "file": "IDM - Spring Summer'26 Order Form.xlsx",
+          "sheet": "Additional Styles Selected",
+          "headerRow": 3
+        },
+        {
+          "file": "IDM - Spring Summer'26 Order Form.xlsx",
+          "sheet": "Exclusive Styles",
+          "headerRow": 3
+        }
+      ]
+    }
+  },
+  "STACCATO": {
+    "Inline": {
+      "Linesheet": {
+        "file": "linesheet_selection.xlsx",
+        "sheet": "Linesheet"
+      }
+    }
+  },
+  "ELLESSE": {
+    "Licensed": {
+      "Recap Sample": {
+        "file": "Recap_Sample_Ellesse.xlsx",
+        "sheet": "ELL"
+      },
+      "Recap Sample 2nd Ingestion": {
+        "file": "Recap_Sample_Ellesse_2nd_Ingestion.xlsx",
+        "sheet": "ELL"
+      }
+    }
+  },
+  "K SWISS": {
+    "Inline": {
+      "Buy2 update_KSWISS FW26 Global Line Order Form_Lifestyle": [
+        {
+          "file": "Buy2 update_KSWISS FW26 Global Line Order Form_Lifestyle-feedback 23.12.2025.xlsx",
+          "sheet": "Performance Linelist",
+          "headerRow": 4
+        },
+        {
+          "file": "Buy2 update_KSWISS FW26 Global Line Order Form_Lifestyle-feedback 23.12.2025.xlsx",
+          "sheet": "Lifestyle Linelist",
+          "headerRow": 4
+        }
+      ],
+      "FW26 UPC - PT.MAP": {
+        "file": "FW26 UPC - PT.MAP 20260508.xlsx",
+        "sheet": "Sheet1",
+        "headerRow": 1
+      }
+    },
+    "Licensed": {
+      "Recap Sample": {
+        "file": "Recap_Sample_K_Swiss.xlsx",
+        "sheet": "KSW"
+      },
+      "Recap Sample 2nd Ingestion": {
+        "file": "Recap_Sample_K_Swiss_2nd_Ingestion.xlsx",
+        "sheet": "KSW"
+      }
+    }
+  },
+  "ASTEC": {
+    "Licensed": {
+      "Recap Sample": {
+        "file": "Recap_Sample_Astec.xlsx",
+        "sheet": "ASC"
+      },
+      "Recap Sample 2nd Ingestion": {
+        "file": "Recap_Sample_Astec_2nd_Ingestion.xlsx",
+        "sheet": "ASC"
+      }
+    }
+  },
+  "AIRWALK": {
+    "Licensed": {
+      "Recap Sample": {
+        "file": "Recap_Sample_Airwalk.xlsx",
+        "sheet": "AIW"
+      },
+      "Recap Sample 2nd Ingestion": {
+        "file": "Recap_Sample_Airwalk_2nd_Ingestion.xlsx",
+        "sheet": "AIW"
+      }
+    }
+  },
+  "ASICS": {
+    "Inline": {
+      "OTB  AW26 P.RUN  MAA": {
+        "file": "OTB - AW26 P.RUN - MAA.xlsx",
+        "sheet": "AW26 OTB Detail",
+        "headerRow": 6
+      },
+      "OTB  AW26 APEQ  MAA": {
+        "file": "OTB - AW26 APEQ - MAA.xlsx",
+        "sheet": "AW26",
+        "headerRow": 6
+      },
+      "MAA_AW26 EAN CODE UPDATE_272026": {
+        "file": "MAA_AW26 EAN CODE UPDATE_272026.xlsx",
+        "sheet": "Sheet2",
+        "headerRow": 1
+      }
+    }
+  },
+  "STEVE MADDEN": {
+    "Inline": {
+      "FOOTWEAR PO FORM": {
+        "file": "MAA- INTL Women's December FFANY 2025_FOOTWEAR PO FORM_Original.xlsx",
+        "sheet": "All",
+        "headerRow": 9
+      },
+      "HANDBAG PO FORM": {
+        "file": "MAA- INTL Women's December FFANY 2025_HANDBAG PO FORM_Original.xlsx",
+        "sheet": "All",
+        "headerRow": 9
+      },
+      "EAN Source": {
+        "file": "STEVE MADDEN_EAN Source.xlsx",
+        "sheet": "BARCODES",
+        "headerRow": 1
+      }
+    }
+  },
+  "IMPLUS": {
+    "Inline": {
+      "IPL_Article Attributes Source_Sofsole Article Planning": {
+        "file": "1. IPL_Article Attributes Source_Sofsole.xlsx",
+        "sheet": "SUM ORDER",
+        "headerRow": 22
+      },
+      "IPL_Article Attributes Source_Sofsole EAN": {
+        "file": "1. IPL_Article Attributes Source_Sofsole.xlsx",
+        "sheet": "SUM ORDER",
+        "headerRow": 22
+      },
+      "IPL_Article Attributes Source_Balega Article Planning": {
+        "file": "1. IPL_Article Attributes Source_Balega.xlsx",
+        "sheet": "Balega Asia Gen",
+        "headerRow": 20
+      },
+      "IPL_Article Attributes Source_Balega EAN": {
+        "file": "1. IPL_Article Attributes Source_Balega.xlsx",
+        "sheet": "Balega Asia Gen",
+        "headerRow": 20
+      },
+      "IPL_Article Attributes Source_Harbinger Article Planning": {
+        "file": "1. IPL_Article Attributes Source_Harbinger.xlsx",
+        "sheet": "SUM ORDER",
+        "headerRow": 20
+      },
+      "IPL_Article Attributes Source_Harbinger EAN": {
+        "file": "1. IPL_Article Attributes Source_Harbinger.xlsx",
+        "sheet": "SUM ORDER",
+        "headerRow": 20
+      }
+    }
+  },
+  "PTP": {
+    "Inline": {
+      "V2 ASIA ORDER FORM USD FOB": {
+        "file": "V2 ASIA ORDER FORM USD FOB 20260207.xlsx",
+        "sheet": "Order",
+        "headerRow": 4
+      },
+      "PTP_EAN Source": {
+        "file": "3. PTP_EAN Source.xlsx",
+        "sheet": "Order",
+        "headerRow": 4
+      }
+    }
+  },
+  "REEBOK": {
+    "Inline": {
+      "Reebok article master data with image - APPAREL (SS27) - Copy": {
+        "file": "Reebok article master data with image - APPAREL (SS27) - Copy.xlsx",
+        "sheet": "NuORDER Order Data",
+        "headerRow": 1
+      },
+      "Reebok article master data with image - FOOTWEAR (SS27) - Copy": {
+        "file": "Reebok article master data with image - FOOTWEAR (SS27) - Copy.xlsx",
+        "sheet": "NuORDER Order Data",
+        "headerRow": 1
+      },
+      "REEBOK_Article Attributes EAN Source": {
+        "file": "REEBOK_Article Attributes EAN Source.xlsx",
+        "sheet": "NuORDER Order Data",
+        "headerRow": 1
+      }
+    }
+  },
+  "ANTA": {
+    "Inline": {
+      "Stibo Line List Template - Anta": {
+        "file": "Stibo Line List Template - Anta.xlsx",
+        "sheet": "1. Template",
+        "headerRow": 1
+      },
+      "ANTA_EAN Source": {
+        "file": "ANTA_EAN Source.xlsx",
+        "sheet": "EAN",
+        "headerRow": 1
+      }
+    }
+  },
+  "NEW ERA": {
+    "Inline": {
+      "Copy of Order form - APAC FW26 (ACC)_Revised Size": {
+        "file": "order_form_Acc.xlsx",
+        "sheet": "FW26 APAC ACC"
+      },
+      "Copy of Order form - APAC FW26 (APP) 1": {
+        "file": "order_form_App.xlsx",
+        "sheet": "APAC FW26-APP"
+      },
+      "Copy of Order form - APAC FW26 (HW)_Revised Pricing": {
+        "file": "order_form_HW.xlsx",
+        "sheet": "APAC FW26 HW"
+      },
+      "Delivery schedule 12.23.2025-PT MAP -": {
+        "file": "Delivery schedule 12.23.2025-PT MAP -.XLSX",
+        "sheet": "Sheet1"
+      }
+    }
+  }
+}

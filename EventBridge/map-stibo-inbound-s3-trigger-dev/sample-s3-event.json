@@ -1,0 +1,29 @@
+{
+    "version": "0",
+    "id": "28894235-16e5-c209-3aef-8fefe744c214",
+    "detail-type": "Object Created",
+    "source": "aws.s3",
+    "account": "590184096617",
+    "time": "2026-08-22T13:40:00Z",
+    "region": "ap-southeast-3",
+    "resources": [
+        "arn:aws:s3:::map-stibo-inbound-raw-dev"
+    ],
+    "detail": {
+        "version": "0",
+        "bucket": {
+            "name": "map-stibo-inbound-raw-dev"
+        },
+        "object": {
+            "key": "raw/metadata/stibo_export_data.json",
+            "size": 2048,
+            "etag": "c2857bd03503e3458d7346c5e3722295",
+            "version-id": "JZW4q56CU1bd9ikIh2ipvTeT2b.Nsp9f",
+            "sequencer": "00617F08299329D190"
+        },
+        "request-id": "P5P8HEK69ONLK23S",
+        "requester": "590184096617",
+        "source-ip-address": "10.0.0.1",
+        "reason": "PutObject"
+    }
+}

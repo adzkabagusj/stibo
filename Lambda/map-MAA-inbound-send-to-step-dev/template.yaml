@@ -1,0 +1,38 @@
+# This AWS SAM template has been generated from your function's configuration.
+# If your function has one or more triggers, note that the AWS resources
+# associated with these triggers aren't fully specified in this template and
+# include placeholder values. Open this template in AWS Infrastructure Composer
+# or your favorite IDE and modify it to specify a serverless application with
+# other AWS resources.
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: An AWS Serverless Application Model (SAM) template describing your function.
+Resources:
+  mapMAAinboundsendtostepdev:
+    Type: AWS::Serverless::Function
+    Properties:
+      Architectures:
+        - x86_64
+      CodeUri: ./src
+      Description: ''
+      Environment:
+        Variables:
+          DESTINATION_BUCKET_B: lh-sadp-em-local-data-eu-west-1-wbeo
+      EphemeralStorage:
+        Size: 512
+      Handler: lambda_function.lambda_handler
+      LoggingConfig:
+        LogFormat: Text
+        LogGroup: /aws/lambda/map-MAA-inbound-send-to-step-dev
+      MemorySize: 128
+      PackageType: Zip
+      RecursiveLoop: Terminate
+      Runtime: python3.14
+      RuntimeManagementConfig:
+        UpdateRuntimeOn: Auto
+      SnapStart:
+        ApplyOn: None
+      Tags: {}
+      Timeout: 3
+      Tracing: PassThrough
+      Role: arn:aws:iam::590184096617:role/map-maa-adidas

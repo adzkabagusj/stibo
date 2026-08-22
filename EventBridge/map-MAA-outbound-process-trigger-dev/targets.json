@@ -1,0 +1,14 @@
+[
+    {
+        "Id": "map-MAA-outbound-transform-by-dev",
+        "Arn": "arn:aws:lambda:ap-southeast-3:590184096617:function:map-MAA-outbound-transform-by-dev",
+        "TargetType": "AWS::Lambda::Function",
+        "InputType": "Matched event",
+        "Role": "Amazon_EventBridge_Invoke_Lambda_1141704047",
+        "DeadLetterConfig": null,
+        "RetryPolicy": {
+            "MaximumRetryAttempts": 185,
+            "MaximumEventAgeInSeconds": 86400
+        }
+    }
+]

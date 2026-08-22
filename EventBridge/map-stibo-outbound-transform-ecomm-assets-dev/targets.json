@@ -1,0 +1,14 @@
+[
+    {
+        "Id": "map-stibo-outbound-transform-ecomm-assets-dev",
+        "Arn": "arn:aws:lambda:ap-southeast-3:590184096617:function:map-stibo-outbound-transform-ecomm-assets-dev",
+        "TargetType": "AWS::Lambda::Function",
+        "InputType": "Matched event",
+        "Role": "Amazon_EventBridge_Invoke_Lambda_1864186034",
+        "DeadLetterConfig": null,
+        "RetryPolicy": {
+            "MaximumRetryAttempts": 185,
+            "MaximumEventAgeInSeconds": 86400
+        }
+    }
+]

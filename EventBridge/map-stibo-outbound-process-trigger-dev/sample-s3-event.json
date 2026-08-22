@@ -1,0 +1,29 @@
+{
+    "version": "0",
+    "id": "399a5346-27f6-d31a-4bff-9f0fe855d325",
+    "detail-type": "Object Created",
+    "source": "aws.s3",
+    "account": "590184096617",
+    "time": "2026-08-22T13:45:00Z",
+    "region": "ap-southeast-3",
+    "resources": [
+        "arn:aws:s3:::map-stibo-outbound-dev"
+    ],
+    "detail": {
+        "version": "0",
+        "bucket": {
+            "name": "map-stibo-outbound-dev"
+        },
+        "object": {
+            "key": "step-export/stibo_outbound_data.xml",
+            "size": 8192,
+            "etag": "d3968ce14614f4569e8457d6f4833306",
+            "version-id": "KAX5r67DV2ce0jlJi3jqwUfU3c.Otq0g",
+            "sequencer": "00617F08299329D191"
+        },
+        "request-id": "Q6Q9IFL70POMM34T",
+        "requester": "590184096617",
+        "source-ip-address": "10.0.0.1",
+        "reason": "PutObject"
+    }
+}

@@ -1,0 +1,29 @@
+{
+    "version": "0",
+    "id": "17793124-05d4-b198-2fde-7ededc63b103",
+    "detail-type": "Object Created",
+    "source": "aws.s3",
+    "account": "590184096617",
+    "time": "2026-08-22T13:40:00Z",
+    "region": "ap-southeast-3",
+    "resources": [
+        "arn:aws:s3:::map-MAA-outbound-dev"
+    ],
+    "detail": {
+        "version": "0",
+        "bucket": {
+            "name": "map-MAA-outbound-dev"
+        },
+        "object": {
+            "key": "outbound_data_file.csv",
+            "size": 1024,
+            "etag": "b1946ac92492d2347c6235b4d2611184",
+            "version-id": "IYV3p45BT0ac8hjHg1houSdS1a.Mro8e",
+            "sequencer": "00617F08299329D189"
+        },
+        "request-id": "N4N7GDK58NMKJ12R",
+        "requester": "590184096617",
+        "source-ip-address": "10.0.0.1",
+        "reason": "PutObject"
+    }
+}

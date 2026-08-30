@@ -23,11 +23,13 @@ Column layout (Clarks Order Form Footwear — brand mapping sheet "Clarks(Inline
     MediumColour        → AT_PrincipalColorName  (per variant)
     GenderName          → AT_PrincipalGenderDescription (1st sentence)
                           AT_PrincipalMerchandiseHierarchyL3
+    Gender              → AT_Gender    (LOV — SAP label → MDD Gender LOV)
+                          AT_BYGender  (LOV — BY label → MDD Gender LOV)
     Country of Origins  → AT_CountryOrigin  (LOV)
     BusinessUnitDesc    → AT_PrincipalMerchandiseHierarchyL1
     program             → AT_PrincipalMerchandiseHierarchyL4
                           AT_Style  (LOV — MD will provide mapping)
-                          AT_Collection1
+                          AT_Collection1  (LOV — raw program value, no MD Mapping lookup)
     UpperMaterial       → AT_Material  (LOV)
     BrandName           → AT_Brand  (LOV)
     DivisionName/BU     → context info
@@ -105,6 +107,21 @@ _GENDER_TO_SAP: dict[str, str] = {    # Footwear
     "MENS":   "Male",
     "BOYS":   "Male",
     "GIRLS":  "Female"
+}
+
+# ======================================================================
+# BY GENDER MAPPING  (Gender → BY Gender LOV display value)
+# ======================================================================
+# Keyed on the FULL Gender value (upper-cased), not just the 1st word,
+# so phrases like "Mens Accessories" / "Womens Bag" map explicitly.
+_GENDER_TO_BYGENDER: dict[str, str] = {
+    "WOMENS":             "Women",
+    "MENS":               "Men",
+    "BOYS":               "Boys",
+    "GIRLS":              "Girls",
+    "MENS ACCESSORIES":   "Men",
+    "WOMENS ACCESSORIES": "Women",
+    "WOMENS BAG":         "Women",
 }
 
 # ======================================================================
@@ -1067,7 +1084,7 @@ def group_rows(
     col_season       = loader.find_col("SeasonCode", "Season Code")
     col_product_type = loader.find_col("ProductTypeDesc", "Product Type Desc")
     col_size_range   = loader.find_col("Size Range", "SizeRange", "Size_Range")
-    col_id_fob       = loader.find_col("ID FOB", "IDFOB", "ID_FOB", "FOB")
+    col_unit_price   = loader.find_col("ID UNIT PRICE (USD)", "ID UNIT PRICE USD", "ID_UNIT_PRICE_USD", "ID UNIT PRICE")
     col_collection   = loader.find_col("Collection")
     col_tube_gender  = loader.find_col("Tube /\nGenderName", "Tube /  GenderName", "Tube / GenderName", "Tube/GenderName", "Tube/  GenderName", "Tube", "TubeGenderName")
     col_prod_type    = loader.find_col("Prod Type", "ProdType", "Prod_Type")
@@ -1118,7 +1135,7 @@ def group_rows(
             season_code  = _s(row.get(col_season, ""))        if col_season       else ""
             product_type = _s(row.get(col_product_type, "")) if col_product_type else ""
             size_range   = _s(row.get(col_size_range, ""))    if col_size_range   else ""
-            id_fob       = _s(row.get(col_id_fob, ""))        if col_id_fob       else ""
+            unit_price   = _s(row.get(col_unit_price, ""))    if col_unit_price   else ""
             collection   = _s(row.get(col_collection, ""))    if col_collection   else ""
             tube_gender  = _s(row.get(col_tube_gender, ""))   if col_tube_gender  else ""
             prod_type    = _s(row.get(col_prod_type, ""))     if col_prod_type    else ""
@@ -1152,6 +1169,16 @@ def group_rows(
             if sap_gender and mdd:
                 gender_lov = mdd.lovs.get("GenderLOV", {})
                 sap_gender = gender_lov.get(sap_gender.upper(), "")
+
+            # BY Gender mapping (two-step: dictionary -> MDD LOV), same
+            # pattern as AT_Gender above but keyed on the FULL Gender value
+            # ("Mens Accessories" -> "Men") rather than a single word.
+            # No fallback: unmapped values leave AT_BYGender blank.
+            bygender_key = gender_raw.strip().upper()
+            by_gender    = _GENDER_TO_BYGENDER.get(bygender_key, "")
+            if by_gender and mdd:
+                gender_lov = mdd.lovs.get("GenderLOV", {})
+                by_gender  = gender_lov.get(by_gender.upper(), "")
 
             # Country of Origin LOV lookup
             country_raw = ""
@@ -1204,11 +1231,9 @@ def group_rows(
                 b_lov    = mdd.lovs.get("BrandLOV", {})
                 brand_lov_id = b_lov.get(brand_name.upper(), brand_name)
 
-            # Collection1 LOV from program
-            collection1_lov_id = ""
-            if mdd and program:
-                c1_lov = mdd.lovs.get("AT_Collection1", {})
-                collection1_lov_id = c1_lov.get(program.upper(), "")
+            # Collection1: raw "program" value, sent as the LOV value
+            # (no "Clarks MD Mapping" lookup)
+            collection1_lov_id = program
 
             result[generic_key] = {
                 # Key identifiers
@@ -1236,13 +1261,14 @@ def group_rows(
                 "AT_Material":                      material_id,
                 "AT_CareInstructionEN":             care_en,
                 "AT_SAPGender":                     sap_gender,
+                "AT_BYGender":                      by_gender,
                 "AT_SAPAge":                        "AD",
                 "AT_PricingDistributionChannel":    "01",
                 "AT_ArticleStatus":                 "A",
                 "AT_SeasonCode":                    season_code,
                 "AT_ProductType":                   product_type,
                 "AT_BU":                            bu,
-                "AT_FOB":                           id_fob,
+                "AT_FOB":                           unit_price,
                 "AT_HeelHeight":                    heel_height_lov_id,
                 "AT_LaunchingDate":                 launch_month,
                 "AT_Style":                         style_value,
@@ -1434,6 +1460,7 @@ def build_product_xml(
     _val_text(gv, "AT_PrincipalMerchandiseHierarchyL3", generic["AT_PrincipalMerchandiseHierarchyL3"])
     _val_text(gv, "AT_PrincipalMerchandiseHierarchyL4", generic["AT_PrincipalMerchandiseHierarchyL4"])
     if generic.get("AT_Collection1"):
+        # LOV-backed attr, but sent as the LOV *value* (element text), not an ID
         _val_text(gv, "AT_Collection1",                    generic["AT_Collection1"])
     if generic.get("AT_CareInstructionEN"):
         _val_text(gv, "AT_CareInstructionEN", generic["AT_CareInstructionEN"])
@@ -1449,6 +1476,8 @@ def build_product_xml(
         _val_lov(gv, "AT_Material",      generic["AT_Material"])
     if generic.get("AT_SAPGender"):
         _val_lov(gv, "AT_Gender",        generic["AT_SAPGender"])
+    if generic.get("AT_BYGender"):
+        _val_lov(gv, "AT_BYGender",      generic["AT_BYGender"])
     if generic.get("AT_SAPAge"):
         _val_lov(gv, "AT_SAPAge",           generic["AT_SAPAge"])
     if generic.get("AT_PricingDistributionChannel"):
@@ -1544,7 +1573,7 @@ def build_product_xml(
     # ── FOB Currency (default USD) ───────────────────────────────
     _val_lov(gv, "AT_FOBCurrency", "USD")
 
-    # ── FOB (from ID FOB column) ─────────────────────────────────
+    # ── FOB (from "ID UNIT PRICE (USD)" column) ──────────────────
     if generic.get("AT_FOB"):
         _val_text(gv, "AT_FOB", generic["AT_FOB"])
 

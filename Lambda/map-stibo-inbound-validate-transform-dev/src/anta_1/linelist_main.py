@@ -116,6 +116,13 @@ INPUT_SHEET_NAME   = "1. Template"   # sheet in the Anta linelist file
 # See "ASSUMPTION flagged" note in the module docstring.
 DEFAULT_PRODUCT_PARENT_ID = "PPH_F-TempSubCat"
 
+# ParentID by Category column value.
+CATEGORY_PARENT_IDS: dict[str, str] = {
+    "FTW": "PPH_F-TempSubCat",
+    "APP": "PPH_A-TempSubCat",
+    "ACC": "PPH_E-TempSubCat",
+}
+
 # Attributes whose Col-J source column (from the ANTA mapping tab) has a
 # known mismatch against the actual "1. Template" header — the mapping
 # sheet's Col J is always tried first; if that column isn't found in the
@@ -139,8 +146,11 @@ COLUMN_FALLBACKS: dict[str, str] = {
 #   zero-padded to 2 digits when the id is a single digit (e.g. "2" -> "02").
 #   AT_LaunchingDate: needs a date reformat (input M/D/YY(YY) -> DD-Mon-YYYY,
 #   e.g. "9/23/26" -> "23-Sep-2026") before being sent as a text value.
+#   AT_CountrySize: derived from "Category" column with fixed LOV IDs:
+#     FTW -> US, APP -> ASIA, ACC -> skipped.
 SPECIAL_ATTRIBUTE_IDS: set[str] = {
     "AT_IncomingMonth", "AT_EComAgesCategory", "AT_SportsCategoryEN", "AT_LaunchingDate",
+    "AT_CountrySize",
 }
 
 # ======================================================================
@@ -739,7 +749,7 @@ class AttributeMappingLoader:
 # dynamically from the attribute rules' Col J source-column names)
 # ======================================================================
 
-class Anta_1LinelistLoader:
+class AntaLinelistLoader:
     def __init__(self, path: Path, needed_columns: list[str], sheet_name: str = INPUT_SHEET_NAME):
         self.path = path
         self.sheet_name = sheet_name
@@ -820,7 +830,7 @@ class Anta_1LinelistLoader:
         return None
 
 
-def _resolve_source_col(loader: "Anta_1LinelistLoader", rule: "AttributeRule") -> str | None:
+def _resolve_source_col(loader: "AntaLinelistLoader", rule: "AttributeRule") -> str | None:
     """
     Resolve the actual input-sheet column for a rule: the mapping sheet's
     Col J is always tried first; if that column isn't present in the input
@@ -910,7 +920,7 @@ def build_classifications(brand: str, brand_code: str, season_code: str) -> ET.E
 
 def build_generic_product(
     row: dict,
-    loader: Anta_1LinelistLoader,
+    loader: AntaLinelistLoader,
     rules: list[AttributeRule],
     brand: str,
     brand_code: str,
@@ -933,9 +943,13 @@ def build_generic_product(
 
     generic_code = f"{brand_code}{style_code}"
 
+    category_col = loader.find_col("Category")
+    category_val = _s(row.get(category_col, "")).upper() if category_col else ""
+    parent_id = CATEGORY_PARENT_IDS.get(category_val, DEFAULT_PRODUCT_PARENT_ID)
+
     g_el = ET.Element(f"{{{STIBO_NS}}}Product")
     g_el.set("UserTypeID", "PRD_GenericArticle")
-    g_el.set("ParentID", DEFAULT_PRODUCT_PARENT_ID)
+    g_el.set("ParentID", parent_id)
 
     kv = ET.SubElement(g_el, f"{{{STIBO_NS}}}KeyValue")
     kv.set("KeyID", "KEY_InboundArticle")
@@ -1059,6 +1073,18 @@ def build_generic_product(
             _val_lov(gv, "AT_BrandGroup", bg_lov_id)
         else:
             _val_text(gv, "AT_BrandGroup", brand_group)
+
+    # AT_CountrySize: derived from input "Category" column.
+    #   FTW -> US
+    #   APP -> ASIA
+    #   ACC -> skip attribute
+    category_col = loader.find_col("Category")
+    if category_col:
+        category_val = _s(row.get(category_col, "")).upper()
+        if category_val == "FTW":
+            _val_lov(gv, "AT_CountrySize", "US")
+        elif category_val == "APP":
+            _val_lov(gv, "AT_CountrySize", "ASIA")
 
     # ── Dynamic per-row attributes — driven entirely by the ANTA mapping tab.
     for rule in rules:
@@ -1218,7 +1244,7 @@ def run(args, auditor=None):
         raise FileNotFoundError(f"No Anta linelist file found in {INPUT_DIR}")
 
     needed_columns = [r.source_column for r in attr_map.rules] + list(COLUMN_FALLBACKS.values())
-    loader = Anta_1LinelistLoader(input_file, needed_columns, INPUT_SHEET_NAME)
+    loader = AntaLinelistLoader(input_file, needed_columns, INPUT_SHEET_NAME)
     if not loader.rows:
         log.warning("[Anta-Linelist] No data rows found — nothing to process")
         return
@@ -1241,10 +1267,6 @@ def run(args, auditor=None):
     if not generics:
         log.warning("[Anta-Linelist] No valid generics produced")
         return
-
-    # ── DEV LIMIT: cap to first 5 generics ───────────────────────
-    generics = dict(list(generics.items())[:5])
-    log.info("[Anta-Linelist] DEV LIMIT: capped to first 5 generic(s)")
 
     sp_code  = season[:2].upper() if len(season) >= 2 else season
     sys_part = season[2:] if len(season) > 2 else ""

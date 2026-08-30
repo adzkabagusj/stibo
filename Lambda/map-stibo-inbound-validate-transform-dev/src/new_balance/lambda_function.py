@@ -1147,7 +1147,6 @@
 #         "status":              "ok",
 #     }
 
-
 """
 lambda_function.py — Unified Lambda Handler (New Balance)
 ==========================================================
@@ -1162,19 +1161,22 @@ File-type → ETL dispatch:
     ├─────────────────────────────────────────────────────────────────────────┤
     │ "Line List (Apparel & Accessories)"      → new_balance.main             │
     │ "Line List (Footwear)"                   → new_balance.main_footwear    │
+    │ "Line List (Footwear GTM)" / "...GTM..."  → new_balance.inline_gtm_...   │
     │ "Line List"  (no Apparel/Footwear qual.) → new_balance.linelist_main    │
     │ "Ecommerce File"                         → new_balance.ecommerce_main   │
     └─────────────────────────────────────────────────────────────────────────┘
 
     Detection order matters:
-        1. linelist_footwear  (most specific footwear check)
+        1. linelist_footwear_gtm (GTM line sheet — most specific)
+        2. linelist_footwear  (footwear price list)
         2. linelist_apparel   (explicit apparel/accessories check)
         3. ecommerce          (ecommerce / dtc / map_s keywords)
         4. linelist_licensed  (plain "line list" with no apparel/footwear qual.)
 
 Linelist sub-type folders under input/:
     /tmp/stibo_workdir/input/linelist_apparel/    ← Apparel & Accessories
-    /tmp/stibo_workdir/input/linelist_footwear/   ← Footwear
+    /tmp/stibo_workdir/input/linelist_footwear/   ← Footwear (price list)
+    /tmp/stibo_workdir/input/linelist_footwear_gtm/ ← Footwear GTM line sheet
     /tmp/stibo_workdir/input/linelist_licensed/   ← Licensed plain line list
     /tmp/stibo_workdir/input/ecommerce/           ← Ecommerce export
     /tmp/stibo_workdir/input/mdd/
@@ -1216,6 +1218,7 @@ os.environ["LAMBDA_TMP_DIR"] = TMP_WORKDIR
 
 import new_balance.inline_main_accessories           as etl_apparel        # NB inline apparel & accessories
 import new_balance.inline_main_footwear  as etl_footwear        # NB inline footwear
+import new_balance.inline_gtm_footwear_main as etl_footwear_gtm # NB inline footwear GTM line sheet
 import new_balance.licensed_linelist_main  as etl_licensed_list   # NB licensed line list
 import new_balance.licensed_ecommerce_main as etl_ecommerce       # NB ecommerce export
 import new_balance.inline_ecommerce_main as etl_inline_ecommerce  # NB inline ecommerce export
@@ -1290,7 +1293,15 @@ FILE_TYPE_KEYWORDS: dict[str, list[str]] = {
     "master upc", "master_upc",
     "barcode",
     ],
-    # ── 1. Footwear (most specific — checked first) ───────────────────────
+    # ── 1. Footwear GTM line sheet (more specific than plain footwear) ────
+    "linelist_footwear_gtm": [
+        "line list (footwear gtm)",
+        "linelist (footwear gtm)",
+        "line sheet (footwear gtm)",
+        "footwear gtm",
+        "gtm footwear",
+    ],
+    # ── 2. Footwear price list ────────────────────────────────────────────
     "linelist_footwear": [
         "line list (footwear)",
         "linelist (footwear)",
@@ -1363,6 +1374,7 @@ FILE_TYPE_KEYWORDS: dict[str, list[str]] = {
 ETL_DISPATCHER: dict[str, object] = {
     "linelist_apparel":   etl_apparel,
     "linelist_footwear":  etl_footwear,
+    "linelist_footwear_gtm": etl_footwear_gtm,
     "linelist_licensed":  etl_licensed_list,
     "ecommerce_licensed": etl_ecommerce,
     "ecommerce_inline":   etl_inline_ecommerce,
@@ -1374,6 +1386,7 @@ ETL_DISPATCHER: dict[str, object] = {
 ETL_TYPE_SBU: dict[str, str] = {
     "linelist_apparel":   "AP",
     "linelist_footwear":  "FW",
+    "linelist_footwear_gtm": "FW",
     "linelist_licensed":  "SP",
     "ecommerce_licensed": "SP",
     "ecommerce_inline":   "SP",
@@ -1393,6 +1406,7 @@ REQUIRED_NON_LINELIST_TYPES: set[str] = {"mdd", "attributes"}
 REQUIRED_TYPES_BY_TRIGGER: dict[str, set[str]] = {
     "linelist_apparel":   {"linelist_apparel",   "mdd", "attributes"},
     "linelist_footwear":  {"linelist_footwear",  "mdd", "attributes"},
+    "linelist_footwear_gtm": {"linelist_footwear_gtm", "mdd", "attributes"},
     "linelist_licensed":  {"linelist_licensed",  "mdd", "attributes"},
     "ecommerce_licensed": {"ecommerce_licensed", "mdd", "attributes"},
     "ecommerce_inline":   {"ecommerce_inline",   "mdd", "attributes"},
@@ -1489,6 +1503,18 @@ def _detect_file_type(filename: str) -> str | None:
     has_licensed   = "licensed" in name_norm
     has_inline     = "inline" in name_norm
     has_ean_source = "ean source" in name_norm
+
+    # GTM footwear line sheet — the token "GTM" can sit anywhere in the name
+    # ("Copy of S227 GTM 2 APAC Footwear Line List July 2026"), so match on the
+    # combination rather than on "gtm" alone, which would also swallow an
+    # apparel line list that happens to mention GTM.
+    has_gtm     = re.search(r'\bgtm\b', name_norm) is not None
+    has_apparel = any(k in name_norm for k in ("apparel", "accessor"))
+    has_fw_list = any(
+        k in name_norm for k in ("footwear", "shoes", "line list", "linelist", "line sheet")
+    )
+    if has_gtm and has_fw_list and not has_apparel:
+        return "linelist_footwear_gtm"
 
     if has_ean_source:
         return "ean_source"
@@ -1634,6 +1660,7 @@ def _check_mandatory_files(found: dict[str, dict], triggered_ftype: str | None) 
     missing = list(REQUIRED_NON_LINELIST_TYPES - set(found.keys()))
     has_any_brand_file = any(
         k in found for k in ("linelist_apparel", "linelist_footwear",
+                            "linelist_footwear_gtm",
                             "linelist_licensed", "ecommerce_licensed",
                             "ecommerce_inline", "linelist","ean_source","ordersheet_licensed")  # ← replace "ecommerce"
     )
@@ -1660,6 +1687,7 @@ def _prepare_tmp_dirs() -> dict[str, Path]:
     dirs: dict[str, Path] = {
         "linelist_apparel":   base / "input" / "linelist_apparel",
         "linelist_footwear":  base / "input" / "linelist_footwear",
+        "linelist_footwear_gtm": base / "input" / "linelist_footwear_gtm",
         "linelist_licensed":  base / "input" / "linelist_licensed",
         "ecommerce_licensed": base / "input" / "ecommerce_licensed",
         "ecommerce_inline":   base / "input" / "ecommerce_inline",
@@ -1758,6 +1786,12 @@ def _parse_season_from_header(header: str) -> str | None:
     m = re.search(r'\bF2\s*(\d{2})\b', header, re.IGNORECASE)
     if m:
         return f"FW{m.group(1)}"
+
+    # GTM line-sheet title style: "S2'27 APAC Footwear GTM 2 Line Sheet"
+    m = re.search(r"\b([SF])2['\u2019](\d{2})\b", header, re.IGNORECASE)
+    if m:
+        prefix = "SS" if m.group(1).upper() == "S" else "FW"
+        return f"{prefix}{m.group(2)}"
 
     # ── ADD: Carry Over / Collection season codes ─────────────────
     m = re.search(r'\b(CO|HO|AL|SM|SP|SU|FA|WN)(20\d{2}|\d{2})\b', header, re.IGNORECASE)
@@ -2067,6 +2101,7 @@ def lambda_handler(event, context, auditor=None):
     #                  linelist_licensed > ecommerce
     if etl_module is None:
         for candidate in ("linelist_apparel", "linelist_footwear",
+                  "linelist_footwear_gtm",
                   "linelist_licensed", "ecommerce_licensed",
                   "ecommerce_inline","ean_source","ordersheet_licensed"):
             if candidate in found:
@@ -2188,6 +2223,7 @@ def lambda_handler(event, context, auditor=None):
 
     if not meta_filename:
         for candidate in ("linelist_apparel", "linelist_footwear",
+                  "linelist_footwear_gtm",
                   "linelist_licensed", "ecommerce_licensed",
                   "ecommerce_inline",  "linelist","ean_source","ordersheet_licensed"):
             if candidate in found:

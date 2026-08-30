@@ -71,6 +71,12 @@ EXCLUDED_ATTRIBUTES = {
                               # otherwise win the race and block the correct dedicated
                               # handling below (which uses the captured heel-height value
                               # + HeelHeightMappingLoader + LOV lookup).
+    "AT_PrincipalSize",      # Excluded from the *generic* dynamic-mapping loop only —
+                              # its brand-mapping field ("Material Description") also
+                              # points at the label column, not the value, and would
+                              # otherwise win the race and block the correct dedicated
+                              # handling below (which uses the captured "_available_sizes"
+                              # value from _post_process_colors).
 }
 
 

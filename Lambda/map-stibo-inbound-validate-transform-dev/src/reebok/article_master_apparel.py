@@ -22,14 +22,19 @@ shared brand-mapping workbook, which maps:
     Principal Color Description  ← Color Name
     Principal Gender Description ← Gender
     Principal Age Description    ← Age Group
-    Principal Size               ← Size
+    Principal Size               ← Size Range
     Country of Origin            ← T1 Supplier Country Description
     Principal Merch Hierarchy L1 ← Department
     Principal Merch Hierarchy L2 ← Sports Category
     Principal Merch Hierarchy L3 ← Article Business Segment
     Principal Merch Hierarchy L4 ← Category Marketing Line
-    Sports Category EN           ← Sports Category
-    Content / Material           ← Material Composition
+    Sports Category EN           ← Sports Category  (via "Reebok MD
+                                   Mappings sheet 2" → MDD "Sports Category LOV")
+    Content                      ← Material Composition (fibre families →
+                                   MDD "Content LOV")
+    Fabric                       ← Material Composition (construction
+                                   keyword → MDD "Fabric LOV")
+    Country Size                 ← "Formula in System": FW → US, APP → Asia
     Launching Date               ← Retail Intro Date
     FOB                          ← Customer Price (USD) (USD)
     Original / Current Price     ← M.S.R.P (USD)
@@ -45,9 +50,12 @@ guessed — extend `build_product_xml()` once those lookup tables exist.
 Scope note (matches current Asics-footwear precedent in this codebase):
     Only one <Product UserTypeID="PRD_GenericArticle"> element is emitted
     per generic article. Per-SKU variant rows (color+size / UPC) are
-    grouped and counted for audit purposes but not yet written as
-    individual <Product ParentID="{generic}"> variant elements, since
-    SAP Color/Size resolution isn't available from this input alone.
+    grouped and counted for audit purposes but not written as individual
+    <Product UserTypeID="PRD_VariantArticle"> elements — AT_EComSize was
+    the one variant-level attribute this feed carried and MD has since
+    dropped it from scope, and the rest (SAP 103 Color via "AI Image
+    Analyst", AT_Size/AT_SAPSize via BY feedback) have no input here.
+    Barcodes/variants for Reebok come from reebok/ean_main.py instead.
 """
 
 from __future__ import annotations
@@ -144,6 +152,116 @@ EC_AGES_CATEGORY_MAP: dict[str, str] = {
     "INFANT":    "18-24M",  # Ages 18-24 months
     "INFANTS":   "18-24M",  # Ages 18-24 months
 }
+
+# Reebok raw "Sports Category" → Stibo "Sports Category EN" display value,
+# per the brand mapping template's "Reebok MD Mappings sheet 2" tab
+# (Reebok Inline, source column "Sports Category"). The display value is
+# then resolved to its AT_SportsCategoryEN LOV ID through the MDD
+# "Sports Category LOV" sheet — see MDDLoader._load_sports_category_lov()
+# and _sports_category_en_lov_id() below. Only the values Reebok's own
+# sheet maps are listed; anything else is left unmapped rather than
+# guessed (the LOV rejects unknown IDs on import).
+SPORTS_CATEGORY_EN_MAP: dict[str, str] = {
+    "RUNNING":         "Running",
+    "TRAINING":        "Fitness / Training",
+    "WALKING":         "Outdoor / Trail / Hiking",
+    "TENNIS":          "Tennis / Padel",
+    "BASKETBALL":      "Basketball",
+    "CASUAL":          "Lifestyle / Casual",
+    "SWIM":            "Swimming",
+    "OUTDOOR":         "Outdoor / Trail / Hiking",
+    "FOOTBALL/SOCCER": "Soccer",
+    "GOLF":            "Golf",
+    "SKATE":           "Lifestyle / Casual",
+}
+
+# AT_CountrySize — "Formula in System" per the Reebok(Inline) sheet, which
+# spells the rule out per product type: "FW: US / APP: Asia / ACC: Manual
+# Input". Apparel is a flat "Asia" → MDD "Country Size LOV" ID "ASIA"
+# (the LOV's display value is literally "ASIA"). The ID is validated
+# against that LOV before it's written. ("Reebok MD Mappings sheet 1" still
+# shows an empty APP cell — the attribute row above is the current one.)
+COUNTRY_SIZE = "ASIA"
+
+# ── AT_Content (Apparel) ──────────────────────────────────────────────
+# "Direct from Principal" ← "Material Composition" per the Reebok(Inline)
+# sheet. AT_Content is an LOV, not free text (writing the raw composition
+# string is what threw "Illegal LOV" on import before), and the MDD
+# "Content LOV" sheet is a fibre-family list:
+#     Cotton / Cotton Blend / Cotton Spandex / Nylon / Nylon Blend /
+#     Poly Spandex / Polyester / Polyester Blend / Spandex /
+#     Viscose / Viscose Blend
+# So the composition is parsed into fibre percentages and reduced to the
+# family that matches. Reebok writes both full names ("60% Cotton 40%
+# Polyester") and ISO abbreviations ("87% PA, 13% EL"), so both are keyed.
+CONTENT_FIBER_CODES: dict[str, str] = {
+    "CO":  "COTTON",
+    "CT":  "COTTON",
+    "PES": "POLYESTER",
+    "PL":  "POLYESTER",
+    "PET": "POLYESTER",
+    "PA":  "NYLON",
+    "NY":  "NYLON",
+    "EL":  "SPANDEX",
+    "EA":  "SPANDEX",
+    "SP":  "SPANDEX",
+    "VI":  "VISCOSE",
+    "CV":  "VISCOSE",
+    "RY":  "VISCOSE",
+}
+
+# Checked in order — the first substring hit wins, so longer/more specific
+# names must come first ("POLYESTER" before any bare "POLY" form).
+CONTENT_FIBER_NAMES: list[tuple[str, str]] = [
+    ("COTTON",    "COTTON"),
+    ("POLYESTER", "POLYESTER"),
+    ("POLYAMIDE", "NYLON"),
+    ("NYLON",     "NYLON"),
+    ("ELASTANE",  "SPANDEX"),
+    ("SPANDEX",   "SPANDEX"),
+    ("LYCRA",     "SPANDEX"),
+    ("VISCOSE",   "VISCOSE"),
+    ("RAYON",     "VISCOSE"),
+]
+
+# Two-fibre compositions where the minor fibre is spandex/elastane get
+# their own Content LOV entries; the families without a dedicated
+# "<fibre> Spandex" code fall back to "<fibre> Blend".
+CONTENT_SPANDEX_PAIRS: dict[str, str] = {
+    "COTTON":    "COTTONSPANDEX",
+    "POLYESTER": "POLYSPANDEX",
+    "NYLON":     "NYLONBLEND",
+    "VISCOSE":   "VISCOSEBLEND",
+}
+
+# ── AT_Fabric (Apparel) ───────────────────────────────────────────────
+# "Mapping from Principal" ← "Material Composition" per the Reebok(Inline)
+# sheet. The MDD "Fabric LOV" lists knit/weave constructions rather than
+# fibres, so the composition text is scanned for a construction keyword.
+# Ordered longest-first so "Heavy Jersey"/"French Terry" win over the bare
+# "Jersey"/"Terry" entries. No keyword → attribute skipped (a composition
+# that names no construction has no defensible Fabric value).
+FABRIC_KEYWORDS: list[tuple[str, str]] = [
+    ("HEAVY JERSEY", "HJ"),
+    ("FRENCH TERRY", "TE"),
+    ("CORDUROY",     "CO"),
+    ("INTERLOCK",    "IL"),
+    ("MICROFIBER",   "MF"),
+    ("MICROFIBRE",   "MF"),
+    ("SUSTAINABLE",  "SU"),
+    ("NEOPRENE",     "NP"),
+    ("RIPSTOP",      "RS"),
+    ("RIBSTOP",      "RS"),
+    ("JERSEY",       "JE"),
+    ("FLEECE",       "FL"),
+    ("DENIM",        "DE"),
+    ("SCUBA",        "SC"),
+    ("TERRY",        "TE"),
+    ("TWILL",        "TW"),
+    ("PIQUE",        "PI"),
+    ("PIQUÉ",        "PI"),
+]
+
 
 def _s(v) -> str:
     """Clean string value — returns empty string for None/nan/empty."""
@@ -244,6 +362,118 @@ def _top_material(material_composition: str) -> str:
     return re.sub(r"\s+\d+\s*$", "", name).strip()
 
 
+def _lov_codes(mdd, lov_name: str) -> set[str]:
+    """Set of valid LOV IDs for an MDD sheet-backed LOV (values of the
+    display→ID map loaded by MDDLoader)."""
+    lov = (mdd.lovs.get(lov_name, {}) if mdd else {})
+    return {str(v).strip() for v in lov.values() if str(v).strip()}
+
+
+def _sports_category_en_lov_id(sports_category: str, mdd=None) -> str:
+    """Reebok "Sports Category" → AT_SportsCategoryEN LOV ID.
+
+    Two hops, both taken from the shared mapping workbook:
+      1. raw value → Stibo display value   (SPORTS_CATEGORY_EN_MAP,
+         "Reebok MD Mappings sheet 2")
+      2. display value → numeric LOV ID    (MDD "Sports Category LOV")
+    Single-digit IDs are zero-padded to two chars, matching the LOV IDs
+    Stibo accepts (same rule as asics/footwear_main.py). Returns "" when
+    either hop misses, so the caller skips the attribute.
+    """
+    raw = re.sub(r"\s+", " ", _s(sports_category)).strip().upper()
+    if not raw:
+        return ""
+    display = SPORTS_CATEGORY_EN_MAP.get(raw)
+    if not display:
+        return ""
+    lov = (mdd.lovs.get("SportsCategoryLOV", {}) if mdd else {})
+    lov_id = _s(lov.get(display.upper(), ""))
+    if len(lov_id) == 1 and lov_id.isdigit():
+        lov_id = f"0{lov_id}"
+    return lov_id
+
+
+def _country_size_lov_id(mdd=None) -> str:
+    """COUNTRY_SIZE validated against the MDD "Country Size LOV". Returns
+    "" when the module has no default (Apparel) or the ID isn't in the LOV."""
+    if not COUNTRY_SIZE:
+        return ""
+    return COUNTRY_SIZE if COUNTRY_SIZE in _lov_codes(mdd, "CountrySizeLOV") else ""
+
+
+# Fibre entries look like "60% Cotton 40% Polyester" or "87% PA, 13% EL".
+# The name is captured as letters-only so a delimiter-less run doesn't let
+# one entry swallow the next entry's percentage digits.
+_FIBER_PCT_RE = re.compile(r"(\d+(?:\.\d+)?)\s*%\s*([A-Za-z][A-Za-z .\-]*)")
+
+
+def _fiber_family(name: str) -> str:
+    """Normalise one fibre name/abbreviation to a Content LOV family."""
+    n = re.sub(r"[^A-Z]", "", _s(name).upper())
+    if not n:
+        return ""
+    if n in CONTENT_FIBER_CODES:
+        return CONTENT_FIBER_CODES[n]
+    for token, family in CONTENT_FIBER_NAMES:
+        if token in n:
+            return family
+    return "OTHER"
+
+
+def _fiber_totals(material_composition: str) -> dict[str, float]:
+    """Sum the declared percentages per fibre family. Multi-section cells
+    ("Shell: ... / Panel: ...") are summed across sections — the input
+    carries no section weighting, so the overall dominant fibre is used."""
+    s = _s(material_composition)
+    if not s:
+        return {}
+    if "Upper Composition" in s:
+        s = s.split("Upper Composition:", 1)[-1].split("Bottom Unit Composition")[0]
+    totals: dict[str, float] = {}
+    for pct, name in _FIBER_PCT_RE.findall(s):
+        family = _fiber_family(name)
+        if not family:
+            continue
+        totals[family] = totals.get(family, 0.0) + float(pct)
+    return totals
+
+
+def _content_lov_code(material_composition: str, mdd=None) -> str:
+    """"Material Composition" → AT_Content LOV ID, validated against the
+    MDD "Content LOV". Returns "" when the dominant fibre has no Content
+    family (e.g. wool, acrylic) or the derived ID isn't in the LOV."""
+    totals = _fiber_totals(material_composition)
+    if not totals:
+        return ""
+    ranked   = sorted(totals.items(), key=lambda kv: -kv[1])
+    dominant = ranked[0][0]
+    if dominant == "OTHER":
+        return ""
+    families = [f for f, _ in ranked]
+    if len(families) == 1:
+        code = dominant
+    elif len(families) == 2 and families[1] == "SPANDEX":
+        code = CONTENT_SPANDEX_PAIRS.get(dominant, f"{dominant}BLEND")
+    elif dominant == "SPANDEX":
+        code = "SPANDEX"
+    else:
+        code = f"{dominant}BLEND"
+    return code if code in _lov_codes(mdd, "Content") else ""
+
+
+def _fabric_lov_code(material_composition: str, mdd=None) -> str:
+    """"Material Composition" → AT_Fabric LOV ID, validated against the MDD
+    "Fabric LOV". Returns "" when the text names no known construction."""
+    s = _s(material_composition).upper()
+    if not s:
+        return ""
+    valid = _lov_codes(mdd, "Fabric")
+    for keyword, code in FABRIC_KEYWORDS:
+        if keyword in s and code in valid:
+            return code
+    return ""
+
+
 # ======================================================================
 # MDD LOADER
 # ======================================================================
@@ -273,6 +503,8 @@ class MDDLoader:
         self._load_brand_status_lov(wb)
         self._load_brand_category_lov(wb)
         self._load_brand_group_lov(wb)
+        self._load_sports_category_lov(wb)
+        self._load_country_size_lov(wb)
 
         wb.close()
         log.info("[MDD] %d LOV types loaded", len(self.lovs))
@@ -512,6 +744,53 @@ class MDDLoader:
         self.lovs["AT_BrandGroup"] = lov_map
         log.info("[MDD] Brand Group LOV — %d entries", len(lov_map))
 
+    def _load_sports_category_lov(self, wb):
+        """Sports Category LOV: Col A = display value, Col B = LOV ID.
+
+        Loaded explicitly because the sheet's column order is the reverse
+        of the ID-then-name layout _load_named_lov_sheets() assumes.
+        """
+        sheet = next(
+            (s for s in wb.sheetnames if s.strip().upper() == "SPORTS CATEGORY LOV"),
+            next((s for s in wb.sheetnames
+                  if "SPORTS" in s.upper() and "CATEGORY" in s.upper() and "LOV" in s.upper()), None),
+        )
+        if not sheet:
+            log.warning("[MDD] Sports Category LOV sheet not found — AT_SportsCategoryEN will be skipped")
+            return
+        lov: dict[str, str] = {}
+        for row in list(wb[sheet].iter_rows(values_only=True))[1:]:
+            if not row or len(row) < 2:
+                continue
+            display = str(row[0]).strip() if row[0] else ""
+            lov_id  = str(row[1]).strip() if row[1] else ""
+            if display and lov_id:
+                lov[display.upper()] = lov_id
+        self.lovs["SportsCategoryLOV"] = lov
+        log.info("[MDD] Sports Category LOV: %d entries", len(lov))
+
+    def _load_country_size_lov(self, wb):
+        """Country Size LOV: Col A = display value, Col B = LOV ID (same
+        reversed layout as Sports Category LOV)."""
+        sheet = next(
+            (s for s in wb.sheetnames if s.strip().upper() == "COUNTRY SIZE LOV"),
+            next((s for s in wb.sheetnames
+                  if "COUNTRY" in s.upper() and "SIZE" in s.upper() and "LOV" in s.upper()), None),
+        )
+        if not sheet:
+            log.warning("[MDD] Country Size LOV sheet not found — AT_CountrySize will be skipped")
+            return
+        lov: dict[str, str] = {}
+        for row in list(wb[sheet].iter_rows(values_only=True))[1:]:
+            if not row or len(row) < 2:
+                continue
+            display = str(row[0]).strip() if row[0] else ""
+            lov_id  = str(row[1]).strip() if row[1] else ""
+            if display and lov_id:
+                lov[display.upper()] = lov_id
+        self.lovs["CountrySizeLOV"] = lov
+        log.info("[MDD] Country Size LOV: %d entries", len(lov))
+
     def lookup(self, lov_key: str, display_value: str) -> str:
         """Look up a LOV ID. Returns display_value unchanged if not found."""
         lov = self.lovs.get(lov_key, {})
@@ -750,6 +1029,7 @@ def group_rows(raw_rows: list[dict], loader: ArticleMasterLoader, brand_code: st
     col_gender   = loader.find_col("Gender")
     col_age      = loader.find_col("Age Group")
     col_size     = loader.find_col("Size")
+    col_size_rng = loader.find_col("Size Range")
     col_upc      = loader.find_col("UPC")
     col_sku      = loader.find_col("SKU")
     col_coo      = loader.find_col("T1 Supplier Country Description")
@@ -798,7 +1078,10 @@ def group_rows(raw_rows: list[dict], loader: ArticleMasterLoader, brand_code: st
                 "color_name":       _s(row.get(col_color, "")) if col_color else "",
                 "gender":           _s(row.get(col_gender, "")) if col_gender else "",
                 "age_group":        _s(row.get(col_age, "")) if col_age else "",
-                "principal_size":   _s(row.get(col_size, "")) if col_size else "",
+                # AT_PrincipalSize ← "Size Range" per Reebok(Inline) mapping
+                # sheet (NOT the "Size" column, which feeds the variant/
+                # Principal Barcode size code below).
+                "principal_size":   _s(row.get(col_size_rng, "")) if col_size_rng else "",
                 "country_origin":   _s(row.get(col_coo, "")) if col_coo else "",
                 "department":       _s(row.get(col_dept, "")) if col_dept else "",
                 "sports_category":  _s(row.get(col_sports, "")) if col_sports else "",
@@ -972,23 +1255,55 @@ def build_product_xml(
         _val_text(gv, "AT_PrincipalMerchandiseHierarchyL2", generic["sports_category"])
         # AT_SportsCategoryEN is an LOV attribute in Stibo, not free text —
         # writing the raw "Sports Category" string as-is threw "Illegal LOV"
-        # on import. Left unmapped/blank until a real value→LOV table exists.
-        # _val_text(gv, "AT_SportsCategoryEN", generic["sports_category"])
+        # on import. It now goes through SPORTS_CATEGORY_EN_MAP ("Reebok MD
+        # Mappings sheet 2") and the MDD "Sports Category LOV".
+        sports_cat_lov_id = _sports_category_en_lov_id(generic["sports_category"], mdd)
+        if sports_cat_lov_id:
+            _val_lov(gv, "AT_SportsCategoryEN", sports_cat_lov_id)
+        else:
+            log.warning(
+                "[XML] Sports Category '%s' has no Sports Category EN LOV ID — "
+                "AT_SportsCategoryEN skipped for %s",
+                generic["sports_category"], generic["generic_key"],
+            )
     if generic.get("segment"):
         _val_text(gv, "AT_PrincipalMerchandiseHierarchyL3", generic["segment"])
     if generic.get("mkt_line"):
         _val_text(gv, "AT_PrincipalMerchandiseHierarchyL4", generic["mkt_line"])
 
-    # ── Material (Direct from Principal — single "Material Composition" col) ──
-    # AT_Content and AT_Material are LOV attributes in Stibo, not free text —
-    # writing the raw composition string / extracted material name threw
-    # "Illegal LOV" on import. Left unmapped/blank until a real value→LOV
-    # table exists (same gap as AT_MaterialUpper / AT_Fabric).
-    # if generic.get("material"):
-    #     _val_text(gv, "AT_Content", generic["material"])
-    #     top_material = _top_material(generic["material"])
-    #     if top_material:
-    #         _val_text(gv, "AT_Material", top_material)
+    # ── Content / Fabric (Direct & Mapping from Principal — both read the
+    # single "Material Composition" col per the Reebok(Inline) sheet) ──
+    # AT_Content and AT_Fabric are LOV attributes in Stibo, not free text —
+    # writing the raw composition string is what threw "Illegal LOV" on
+    # import. Both now resolve to real LOV IDs (MDD "Content LOV" /
+    # "Fabric LOV") and are skipped when the composition supports neither.
+    if generic.get("material"):
+        content_code = _content_lov_code(generic["material"], mdd)
+        if content_code:
+            _val_lov(gv, "AT_Content", content_code)
+        else:
+            log.warning(
+                "[XML] Material Composition %r → no Content LOV match — "
+                "AT_Content skipped for %s",
+                generic["material"][:80], generic["generic_key"],
+            )
+
+        fabric_code = _fabric_lov_code(generic["material"], mdd)
+        if fabric_code:
+            _val_lov(gv, "AT_Fabric", fabric_code)
+        else:
+            log.info(
+                "[XML] Material Composition %r names no Fabric construction — "
+                "AT_Fabric skipped for %s",
+                generic["material"][:80], generic["generic_key"],
+            )
+
+        # AT_Material stays unmapped: the MDD "Material LOV" is a separate
+        # table the mapping workbook doesn't tie to Material Composition,
+        # so the extracted top fibre would still be an illegal LOV ID.
+        # top_material = _top_material(generic["material"])
+        # if top_material:
+        #     _val_text(gv, "AT_Material", top_material)
 
     # ── Pricing (Direct from Principal) ────────────────────────────
     if generic.get("fob"):
@@ -1006,6 +1321,17 @@ def build_product_xml(
     # (Every row in the real Reebok file happens to say "EA" there anyway,
     # but reading it was a deviation from the documented mapping logic.)
     _val_lov(gv, "AT_UOM", "EA")
+
+    # ── Country Size ("Formula in System": FW → US, APP/ACC → blank) ──
+    country_size_id = _country_size_lov_id(mdd)
+    if country_size_id:
+        _val_lov(gv, "AT_CountrySize", country_size_id)
+    elif COUNTRY_SIZE:
+        log.warning(
+            "[XML] Country Size '%s' not found in MDD Country Size LOV — "
+            "AT_CountrySize skipped for %s",
+            COUNTRY_SIZE, generic["generic_key"],
+        )
 
     # ── Country of Origin: T1 Supplier Country Description → ISO code ──
     if generic.get("country_origin"):
@@ -1308,6 +1634,7 @@ def run(args, auditor=None):
 
     raw_rows = loader.df.to_dict("records")
     generics = group_rows(raw_rows, loader, brand_lov_id)
+    # generics = dict(list(generics.items())[:5])  # TEST LIMIT — uncomment to process only first 5 products
 
     if not generics:
         log.warning("[ReebokApparel] No valid generics produced")
@@ -1363,7 +1690,7 @@ def run(args, auditor=None):
         f"=== REEBOK APPAREL SUMMARY ===\n"
         f"  Input rows : {len(raw_rows)}\n"
         f"  Generics   : {generic_count}\n"
-        f"  Variants   : {variant_count} (tracked only — not yet emitted as XML)\n"
+        f"  Variants   : {variant_count} (tracked only — not emitted as XML)\n"
         f"  XML size   : {file_kb} KB",
         flush=True,
     )

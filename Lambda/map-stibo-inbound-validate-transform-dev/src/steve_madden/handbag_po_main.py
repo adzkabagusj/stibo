@@ -101,6 +101,18 @@ def _s(v) -> str:
     return "" if s in ("None", "nan", "NaT", "#VALUE!") else s
 
 
+def _pad_principal_color_code(color_code: str) -> str:
+    """
+    Principal Color Code is sent as-is from the principal file, but a few rows
+    carry fewer than 3 characters (e.g. "56", "76", "ZX"). Left-pad any code
+    shorter than 3 characters with zeros so it is always 3 characters
+    ("76" -> "076", "ZX" -> "0ZX"), regardless of whether it is numeric or
+    alphanumeric. Codes already 3+ characters are left untouched.
+    """
+    cc = _s(color_code)
+    return cc.zfill(3) if cc and len(cc) < 3 else cc
+
+
 def _color_code_3d(color_code: str) -> str:
     """
     Convert color code to 3-character format.
@@ -697,6 +709,7 @@ def group_rows(
         color_code = _s(row.get(col_color_code) if col_color_code else "")
         if color_code.endswith(".0"):
             color_code = color_code[:-2]
+        color_code = _pad_principal_color_code(color_code)
         if not color_code:
             skipped_no_color += 1
             continue
@@ -1259,9 +1272,9 @@ def run(args, auditor=None):
 
         f.write("  <Products>\n")
 
-        all_generics = list(generics.values())
+        all_generics = list(generics.values())[:5]
         log.info(
-            "[SteveMadden-FootwearPO] Processing all %d generics",
+            "[SteveMadden-FootwearPO] Processing %d generics (limited to first 5)",
             len(all_generics),
         )
 

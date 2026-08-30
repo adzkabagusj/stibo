@@ -595,18 +595,18 @@ class BrandMappingLoader:
 class AsicsMDMappingsLoader:
     """
     Loads Asics MD Mappings from 'Asics MD Mappings' sheet.
-    Maps Silo 1 values to Sports Category values.
-    
+    Maps Category 2 values to Sports Category values (apparel/accessories).
+
     Structure:
-    • Col A: Division (filter for 'FTW')
-    • Col B: Silo 1 value
+    • Col A: Division (filter for 'APP' / 'ACC')
+    • Col B: Category 2 value
     • Col D: Sports Category value
     """
-    
+
     def __init__(self, path: Path, sheet_name: str = "Asics MD Mappings"):
         self.path = path
         self.sheet_name = sheet_name
-        self.mappings: dict[str, str] = {}  # Silo1 -> Sports Category
+        self.mappings: dict[str, str] = {}  # Category 2 -> Sports Category
         self._load()
     
     def _load(self):
@@ -638,25 +638,25 @@ class AsicsMDMappingsLoader:
                 log.info("[AsicsMDMappings] Header found at row %d", hdr_idx)
                 break
         
-        # Parse mappings (filter for FTW in Col A)
+        # Parse mappings (filter for APP / ACC in Col A)
         for row in rows[hdr_idx + 1:]:
             if not row or len(row) < 4:
                 continue
-            
-            division = _s(row[0])  # Col A
-            silo1    = _s(row[1])  # Col B
+
+            division  = _s(row[0])  # Col A
+            cat2      = _s(row[1])  # Col B (Category 2)
             sports_cat = _s(row[3])  # Col D
-            
-            # Only include rows where Division = 'FTW'
-            if division.upper() == "FTW" and silo1 and sports_cat:
-                self.mappings[silo1.upper()] = sports_cat
-        
-        log.info("[AsicsMDMappings] Loaded %d FTW mappings from '%s'", 
+
+            # Only include rows where Division = 'APP' or 'ACC'
+            if division.upper() in ("APP", "ACC") and cat2 and sports_cat:
+                self.mappings[cat2.upper()] = sports_cat
+
+        log.info("[AsicsMDMappings] Loaded %d APP/ACC mappings from '%s'",
                 len(self.mappings), self.sheet_name)
-    
-    def get_sports_category(self, silo1: str) -> str:
-        """Get Sports Category for a given Silo 1 value."""
-        return self.mappings.get((silo1 or "").strip().upper(), "")
+
+    def get_sports_category(self, category2: str) -> str:
+        """Get Sports Category for a given Category 2 value."""
+        return self.mappings.get((category2 or "").strip().upper(), "")
 
 
 # ======================================================================
@@ -1465,12 +1465,12 @@ def build_product_xml_dynamic(
     # ── Country Size (default US) ─────────────────────────────────
     _val_lov(gv, "AT_CountrySize", "US")
 
-    # ── Sports Category EN: from Silo 1 via Asics MD Mappings ─────
+    # ── Sports Category EN: from Category 2 via Asics MD Mappings ─────
     _sports_category_en_display = ""   # keep for AT_EComProductNameEN below
-    if generic.get("silo1") and asics_md_mappings and mdd:
-        silo1_value = generic["silo1"]
-        # Step 1: Map Silo 1 to Sports Category using Asics MD Mappings
-        sports_category = asics_md_mappings.get_sports_category(silo1_value)
+    if generic.get("category2") and asics_md_mappings and mdd:
+        category2_value = generic["category2"]
+        # Step 1: Map Category 2 to Sports Category using Asics MD Mappings
+        sports_category = asics_md_mappings.get_sports_category(category2_value)
 
         if sports_category:
             _sports_category_en_display = sports_category   # save display value
@@ -1485,8 +1485,8 @@ def build_product_xml_dynamic(
 
                 _val_lov(gv, "AT_SportsCategoryEN", sports_cat_lov_id)
                 log.info(
-                    "[XML] AT_SportsCategoryEN: silo1='%s' → sports_cat='%s' → lov_id='%s'",
-                    silo1_value, sports_category, sports_cat_lov_id,
+                    "[XML] AT_SportsCategoryEN: category2='%s' → sports_cat='%s' → lov_id='%s'",
+                    category2_value, sports_category, sports_cat_lov_id,
                 )
             else:
                 log.warning(
@@ -1495,8 +1495,8 @@ def build_product_xml_dynamic(
                 )
         else:
             log.warning(
-                "[XML] Silo 1 '%s' not found in Asics MD Mappings",
-                silo1_value,
+                "[XML] Category 2 '%s' not found in Asics MD Mappings",
+                category2_value,
             )
 
     # ── AT_EComProductNameEN: Brand + Working Name + Gender + Sports Category EN + "-" + Colorway ──
@@ -1596,7 +1596,7 @@ def run(args, auditor=None):
 
     # Load Asics MD Mappings for Sports Category
     asics_md_mappings = AsicsMDMappingsLoader(mapping_file, sheet_name="Asics MD Mappings")
-    log.info("[AsicsApparelAcc] Asics MD Mappings loaded: %d FTW entries", len(asics_md_mappings.mappings))
+    log.info("[AsicsApparelAcc] Asics MD Mappings loaded: %d APP/ACC entries", len(asics_md_mappings.mappings))
 
     # Load RNA for brand attributes
     rna = RNALoader(mapping_file)

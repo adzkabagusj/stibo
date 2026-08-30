@@ -128,7 +128,7 @@ EXCLUDED_ATTRIBUTES = {
 # 1-indexed inclusive data-row range for a quick smoke test — set to None
 # (or pass --test-row-range on the CLI / args.test_row_range) for a full
 # production run. Same convention as PTP/order_form_usd_fob.py.
-TEST_ROW_RANGE: tuple[int, int] | None = (1, 5)
+TEST_ROW_RANGE: tuple[int, int] | None = None
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1352,11 +1352,8 @@ def _add_product_values(
     _w("AT_MaterialType",       id_val="ZINA")  # Intercompany
     _w("AT_SAPArticleCategory", id_val="1")     # Generic / Variant
     _w("AT_UOM",                id_val="EA")
+    _w("AT_ImagesSource",       id_val="PHO")
 
-    # ══════════════════════════════════════════════════════════════
-    # 5. BCI
-    # ══════════════════════════════════════════════════════════════
-    _w("AT_BCI", id_val="COMMERCIAL")
 
     # ══════════════════════════════════════════════════════════════
     # 6. BY Age / SAP Age — default Adults, but honor the age data that
@@ -1399,7 +1396,6 @@ def _add_product_values(
     _w("AT_ArticleStatus", id_val="A")
 
     # K-Swiss-specific defaults with no Birkenstock analog in this slot
-    _w("AT_PackDetails",      id_val="S")
     _w("AT_EComAgesCategory", id_val="18+Y")
     
     # Set BY Article Type default

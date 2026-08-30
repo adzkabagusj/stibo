@@ -23,11 +23,13 @@ Column layout (Clarks Order Form Accs — brand mapping sheet "Clarks(Inline)"):
     MediumColour        → AT_PrincipalColorName  (per variant)
     GenderName          → AT_PrincipalGenderDescription (1st sentence)
                           AT_PrincipalMerchandiseHierarchyL3
+                          AT_Gender    (LOV — 1st word → SAP label → MDD Gender LOV)
+                          AT_BYGender  (LOV — full value → BY label → MDD Gender LOV)
     SourceCountry       → AT_CountryOrigin  (LOV)
     BusinessUnitDesc    → AT_PrincipalMerchandiseHierarchyL1
     program             → AT_PrincipalMerchandiseHierarchyL4
                           AT_Style  (LOV — MD will provide mapping)
-                          AT_Collection1
+                          AT_Collection1  (LOV — raw program value, no MD Mapping lookup)
     UpperMaterial       → AT_Material  (LOV)
     BrandName           → AT_Brand  (LOV)
     DivisionName/BU     → context info
@@ -105,6 +107,21 @@ _GENDER_TO_SAP: dict[str, str] = {    # Accessories
     "MENS":               "Male",
     "BOYS":               "Male",
     "GIRLS":              "Female",
+}
+
+# ======================================================================
+# BY GENDER MAPPING  (GenderName → BY Gender LOV display value)
+# ======================================================================
+# Keyed on the FULL GenderName value (upper-cased), not just the 1st word,
+# so phrases like "Mens Accessories" / "Womens Bag" map explicitly.
+_GENDER_TO_BYGENDER: dict[str, str] = {
+    "WOMENS":             "Women",
+    "MENS":               "Men",
+    "BOYS":               "Boys",
+    "GIRLS":              "Girls",
+    "MENS ACCESSORIES":   "Men",
+    "WOMENS ACCESSORIES": "Women",
+    "WOMENS BAG":         "Women",
 }
 
 # ======================================================================
@@ -601,10 +618,14 @@ class RNALoader:
         s2 = s.lstrip("0")
         return s2 if s2 else "0"
 
+    CLARKS_MD_MAPPING_KEYWORDS = ["CLARKS MD MAPPING", "MD MAPPING"]
+
     def __init__(self, path: Path):
         self.path   = path
         self.lookup: dict[tuple, dict] = {}
+        self.style_mapping: dict[str, str] = {}  # program value -> Style LOV value (e.g. 'Umbrella' -> 'Umbrella')
         self._load()
+        self._load_style_mapping()
 
     def _load(self):
         log.info("[RNA] Loading from: %s", self.path.name)
@@ -714,6 +735,96 @@ class RNALoader:
             if kb == b:
                 return val
         return {"brand_type": "", "brand_group": "", "brand_status": ""}
+
+    def _load_style_mapping(self):
+        """Load Style mapping from 'Clarks MD Mapping' sheet.
+        Col H = program value (e.g. 'Umbrella', 'Syn Cosmetic Bag', etc.)
+        Col I = Style LOV value (e.g. 'Umbrella', 'Pouch', 'Backpack', etc.)
+        """
+        log.info("[RNA] Loading Style mapping from: %s", self.path.name)
+        try:
+            wb = openpyxl.load_workbook(self.path, read_only=True, data_only=True)
+        except Exception as e:
+            log.warning("[RNA] Failed to open workbook for style mapping: %s", e)
+            return
+
+        log.info("[RNA] Available sheets: %s", wb.sheetnames)
+
+        # Try multiple search strategies to find the sheet
+        sheet_name = None
+
+        # Strategy 1: Exact match (case-insensitive, normalized whitespace)
+        for s in wb.sheetnames:
+            normalized = re.sub(r'\s+', ' ', s.strip()).upper()
+            if normalized == "CLARKS MD MAPPING":
+                sheet_name = s
+                log.info("[RNA] Found exact match sheet: '%s'", s)
+                break
+
+        # Strategy 2: Contains "MD" and "MAPPING"
+        if not sheet_name:
+            for s in wb.sheetnames:
+                s_upper = s.upper()
+                if "MD" in s_upper and "MAPPING" in s_upper:
+                    sheet_name = s
+                    log.info("[RNA] Found MD+MAPPING match: '%s'", s)
+                    break
+
+        # Strategy 3: Contains "CLARKS" and "MAPPING"
+        if not sheet_name:
+            for s in wb.sheetnames:
+                s_upper = s.upper()
+                if "CLARKS" in s_upper and "MAPPING" in s_upper:
+                    sheet_name = s
+                    log.info("[RNA] Found CLARKS+MAPPING match: '%s'", s)
+                    break
+
+        if not sheet_name:
+            log.warning("[RNA] 'Clarks MD Mapping' sheet not found in %s. Available sheets: %s",
+                       self.path.name, wb.sheetnames)
+            wb.close()
+            return
+
+        log.info("[RNA] Using sheet for style mapping: '%s'", sheet_name)
+        rows = list(wb[sheet_name].iter_rows(values_only=True))
+
+        # Find the header row containing "program" and "Style"
+        hdr_idx = None
+        for i, r in enumerate(rows):
+            if r and len(r) >= 9:  # Need at least columns up to I (index 8)
+                # Check if this row has "program" in col H (index 7) and "Style" in col I (index 8)
+                col_h = str(r[7]).strip().lower() if r[7] else ""
+                col_i = str(r[8]).strip().lower() if r[8] else ""
+                if "program" in col_h and "style" in col_i:
+                    hdr_idx = i
+                    break
+
+        if hdr_idx is None:
+            log.warning("[RNA] Cannot find 'program' and 'Style' headers in sheet '%s'", sheet_name)
+            wb.close()
+            return
+
+        # Read value mappings starting from the row after header
+        # Col H = index 7 (program), Col I = index 8 (Style)
+        for row in rows[hdr_idx + 1:]:
+            if not row or len(row) < 9:
+                continue
+            program_val = row[7]  # Col H
+            style_val = row[8]    # Col I
+            if program_val is not None and style_val:
+                program_str = str(program_val).strip()
+                style_str = str(style_val).strip()
+                if program_str and style_str:
+                    # Store with uppercase key for case-insensitive lookup
+                    self.style_mapping[program_str.upper()] = style_str
+
+        wb.close()
+        log.info("[RNA] Style mapping loaded — %d entries", len(self.style_mapping))
+
+    def get_style_lov_value(self, program_value: str) -> str:
+        """Get Style LOV value for a program value."""
+        val = str(program_value).strip().upper()
+        return self.style_mapping.get(val, "")
 
 
 # ======================================================================
@@ -836,6 +947,7 @@ def group_rows(
     loader: ClarksOrderFormACCsLoader,
     brand_code: str,
     mdd: MDDLoader | None,
+    rna: RNALoader | None = None,
 ) -> dict[str, dict]:
     """
     Group flat rows into Generic articles keyed by KEY_InboundArticle.
@@ -927,6 +1039,16 @@ def group_rows(
                 gender_lov = mdd.lovs.get("GenderLOV", {})
                 sap_gender = gender_lov.get(sap_gender.upper(), "")
 
+            # BY Gender mapping (two-step: dictionary -> MDD LOV), same
+            # pattern as AT_Gender above but keyed on the FULL GenderName
+            # value ("Mens Accessories" -> "Men") rather than the 1st word.
+            # No fallback: unmapped values leave AT_BYGender blank.
+            bygender_key = gender_raw.strip().upper()
+            by_gender    = _GENDER_TO_BYGENDER.get(bygender_key, "")
+            if by_gender and mdd:
+                gender_lov = mdd.lovs.get("GenderLOV", {})
+                by_gender  = gender_lov.get(by_gender.upper(), "")
+
             # Country of Origin LOV lookup
             country_raw = ""
             # (country is variant-level in this file but use from first row for generic)
@@ -953,17 +1075,19 @@ def group_rows(
                 b_lov    = mdd.lovs.get("BrandLOV", {})
                 brand_lov_id = b_lov.get(brand_name.upper(), brand_name)
 
-            # Collection1 LOV from program
-            collection1_lov_id = ""
-            if mdd and program:
-                c1_lov = mdd.lovs.get("AT_Collection1", {})
-                collection1_lov_id = c1_lov.get(program.upper(), "")
+            # Collection1: raw "program" value, sent as the LOV value
+            # (no "Clarks MD Mapping" lookup)
+            collection1_lov_id = program
 
-            # Style LOV from program
+            # Style LOV value from program (via RNA "Clarks MD Mapping" sheet —
+            # NOT the MDD AT_Style LOV; matches order_form_footwear_main.py)
             style_lov_id = ""
-            if mdd and program:
-                style_lov = mdd.lovs.get("AT_Style", {})
-                style_lov_id = style_lov.get(program.upper(), "")
+            if program and rna:
+                style_lov_id = rna.get_style_lov_value(program)
+                log.debug(
+                    "[Grouper] Style: program='%s' -> style_value='%s'",
+                    program, style_lov_id,
+                )
 
             result[generic_key] = {
                 # Key identifiers
@@ -992,6 +1116,7 @@ def group_rows(
                 "AT_Material":                      material_id,
                 "AT_CareInstructionEN":             care_en,
                 "AT_SAPGender":                     sap_gender,
+                "AT_BYGender":                      by_gender,
                 "AT_SAPAge":                        "AD",
                 "AT_PricingDistributionChannel":    "01",
                 "AT_ArticleStatus":                 "A",
@@ -1194,6 +1319,7 @@ def build_product_xml(
     _val_text(gv, "AT_PrincipalMerchandiseHierarchyL3", generic["AT_PrincipalMerchandiseHierarchyL3"])
     _val_text(gv, "AT_PrincipalMerchandiseHierarchyL4", generic["AT_PrincipalMerchandiseHierarchyL4"])
     if generic.get("AT_Collection1"):
+        # LOV-backed attr, but sent as the LOV *value* (element text), not an ID
         _val_text(gv, "AT_Collection1", generic["AT_Collection1"])
     if generic.get("AT_Style"):
         _val_text(gv, "AT_Style", generic["AT_Style"])
@@ -1211,6 +1337,8 @@ def build_product_xml(
         _val_lov(gv, "AT_Material",      generic["AT_Material"])
     if generic.get("AT_SAPGender"):
         _val_lov(gv, "AT_Gender",        generic["AT_SAPGender"])
+    if generic.get("AT_BYGender"):
+        _val_lov(gv, "AT_BYGender",      generic["AT_BYGender"])
     if generic.get("AT_SAPAge"):
         _val_lov(gv, "AT_SAPAge",           generic["AT_SAPAge"])
     if generic.get("AT_PricingDistributionChannel"):
@@ -1497,7 +1625,7 @@ def run(args, auditor=None):
         return
 
     raw_rows = loader.df.to_dict("records")
-    generics = group_rows(raw_rows, loader, brand_lov_id, mdd)
+    generics = group_rows(raw_rows, loader, brand_lov_id, mdd, rna)
 
     if not generics:
         log.warning("[Clarks-OrderFormACCs] No valid generics produced")

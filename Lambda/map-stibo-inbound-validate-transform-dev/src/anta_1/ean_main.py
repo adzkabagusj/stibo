@@ -196,7 +196,7 @@ class MDDLoader:
 # LOADER
 # ======================================================================
 
-class Anta_1EANLoader:
+class AntaEANLoader:
     """Loads Anta EAN source data from the 'EAN' sheet.
 
     Header auto-detection: scans the first 15 rows for signals like
@@ -329,12 +329,20 @@ def _clean_size(val) -> str:
     return "" if s in ("None", "nan") else s
 
 
+def _clean_hs_code(val) -> str:
+    """Clean H.S.Code value while preserving leading zeros."""
+    if val is None:
+        return ""
+    s = str(val).strip()
+    return "" if s in ("None", "nan") else s
+
+
 # ======================================================================
 # MAPPER
 # ======================================================================
 
 def group_ean_rows(raw_rows: list[dict], brand_code: str,
-                   loader: Anta_1EANLoader, mdd: "MDDLoader | None" = None) -> dict[str, dict]:
+                   loader: AntaEANLoader, mdd: "MDDLoader | None" = None) -> dict[str, dict]:
     """
     Groups EAN rows into generics.
 
@@ -350,19 +358,22 @@ def group_ean_rows(raw_rows: list[dict], brand_code: str,
     item_code_col = loader.find_column("Item Code", "ITEM CODE", "item code")
     size_col      = loader.find_column("Sizes", "SIZES", "sizes", "Size", "SIZE")
     barcode_col   = loader.find_column("EAN", "Ean", "ean")
+    hs_code_col   = loader.find_column("H.S.Code", "H.S. Code", "HS Code", "H S Code", "HSCODE")
 
     if not item_code_col:
         log.error("[Anta-EAN] Cannot find Item Code column")
         return result
 
     log.info("[Anta-EAN] All available headers: %s", loader.headers)
-    log.info("[Anta-EAN] Using columns — Item Code: '%s'  Sizes: '%s'  EAN: '%s'",
-             item_code_col, size_col, barcode_col)
+    log.info("[Anta-EAN] Using columns — Item Code: '%s'  Sizes: '%s'  EAN: '%s'  H.S.Code: '%s'",
+             item_code_col, size_col, barcode_col, hs_code_col)
 
     if not size_col:
         log.warning("[Anta-EAN] Sizes column NOT FOUND — size will default to '000'!")
     if not barcode_col:
         log.warning("[Anta-EAN] EAN column NOT FOUND — barcodes will be empty!")
+    if not hs_code_col:
+        log.warning("[Anta-EAN] H.S.Code column NOT FOUND — AT_HSCode will be empty on generic!")
 
     # Get size LOV from MDD
     size_lov = mdd.lovs.get("Size Code") if mdd else None
@@ -379,6 +390,7 @@ def group_ean_rows(raw_rows: list[dict], brand_code: str,
         size_raw    = _clean_size(row.get(size_col)) if size_col else ""
         sap_size    = _maa_size_code(size_raw, size_lov) if size_raw else "000"
         barcode_str = _fmt_barcode(row.get(barcode_col)) if barcode_col else ""
+        hs_code     = _clean_hs_code(row.get(hs_code_col)) if hs_code_col else ""
 
         # KEY_InboundArticle = BrandCode + Item Code
         generic_code = f"{brand_code}{item_code_raw}"
@@ -388,8 +400,12 @@ def group_ean_rows(raw_rows: list[dict], brand_code: str,
                 "style_code":   item_code_raw,
                 "generic_code": generic_code,
                 "brand_code":   brand_code,
+                "hs_code":      hs_code,
                 "variants":     {},
             }
+        elif not result[generic_code].get("hs_code") and hs_code:
+            # Keep first non-empty H.S.Code seen for this generic.
+            result[generic_code]["hs_code"] = hs_code
 
         # KEY_InboundVariant = KEY_InboundArticle + Size LOV ID
         variant_code = f"{generic_code}{sap_size}"
@@ -459,8 +475,14 @@ def build_product_xml(generic: dict) -> str:
     kv.set("KeyID", "KEY_InboundArticle")
     kv.text = generic["generic_code"]
 
-    # Empty Values element for generic
-    ET.SubElement(g_el, f"{{{STIBO_NS}}}Values")
+    # Values element for generic
+    g_values = ET.SubElement(g_el, f"{{{STIBO_NS}}}Values")
+
+    # AT_HSCode from input column "H.S.Code"
+    if generic.get("hs_code"):
+        gv = ET.SubElement(g_values, f"{{{STIBO_NS}}}Value")
+        gv.set("AttributeID", "AT_HSCode")
+        gv.text = generic["hs_code"]
 
     # Variant Articles — sorted by size for stable output
     for size_key in sorted(generic["variants"].keys()):
@@ -509,7 +531,7 @@ def run(args, auditor=None):
     if not ean_file:
         raise FileNotFoundError(f"No EAN source file found in {EAN_DIR}")
 
-    loader = Anta_1EANLoader(ean_file)
+    loader = AntaEANLoader(ean_file)
 
     if loader.df.empty:
         log.warning("[Anta-EAN] No data rows found")
@@ -521,12 +543,6 @@ def run(args, auditor=None):
     if not generics:
         log.warning("[Anta-EAN] No valid generics produced")
         return
-
-    # ── DEV LIMIT: cap to first 2 generics, first 3 variants each ────
-    generics = dict(list(generics.items())[:2])
-    for g in generics.values():
-        g["variants"] = dict(list(g["variants"].items())[:3])
-    log.info("[Anta-EAN] DEV LIMIT: capped to first 2 generic(s), first 3 variant(s) each")
 
     log.info("[Anta-EAN] Total generics to write: %d", len(generics))
 

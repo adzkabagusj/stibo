@@ -215,10 +215,6 @@ FORCED_DIRECT_COLUMNS: dict[str, str] = {
 #   AT_ArticleStatus: fixed default LOV id "A".
 #   AT_SAPProductFlag: fixed default LOV id "A".
 #   AT_SportsCategoryEN: fixed default LOV id "06".
-#   AT_PackDetails: mapping tab's row has NO Col J source at all — Col K
-#   just says "Default : Single". LOV id "S" confirmed via k_swiss's
-#   global_line_order_form.py / implus's linelist_main_source_balega.py,
-#   which both already resolve "Single" -> "S" for this same attribute.
 #   AT_PrincipalSize: NOT a single named column — mapping tab's Col J for
 #   Headwear is "Column : O - AN (No Fill Color)": columns O..AN of the
 #   input sheet are the size grid (each column's own header IS a size
@@ -233,7 +229,7 @@ SPECIAL_ATTRIBUTE_IDS: set[str] = {
     "AT_PricingDistributionChannel", "AT_FOB", "AT_FOBCurrency", "AT_MaterialType",
     "AT_SAPArticleCategory", "AT_UOM", "AT_BYArticleType", "AT_BYAge", "AT_BYGender",
     "AT_Material", "AT_CountrySize", "AT_EComAgesCategory", "AT_ArticleStatus",
-    "AT_SAPProductFlag", "AT_SportsCategoryEN", "AT_PackDetails", "AT_PrincipalSize",
+    "AT_SAPProductFlag", "AT_SportsCategoryEN", "AT_PrincipalSize",
     "AT_PrincipalStyleCode", "AT_PrincipalStyleDescription",
     *FORCED_DIRECT_COLUMNS.keys(),
 }
@@ -910,7 +906,7 @@ def _read_size_grid_fills(path: Path, sheet_name: str, header_row_idx: int,
                 if pattern is None:
                     offered.append(label)
             if offered:
-                result[row_cells[0].row] = ", ".join(offered)
+                result[row_cells[0].row] = ",".join(offered)
     finally:
         wb.close()
     return result
@@ -1243,11 +1239,6 @@ def build_generic_product(
     _val_lov(gv, "AT_SAPProductFlag", "A")
     _val_lov(gv, "AT_SportsCategoryEN", "06")
 
-    # AT_PackDetails: mapping tab has no Col J source — fixed default
-    # "Single" (LOV id "S", per k_swiss/implus precedent — see
-    # SPECIAL_ATTRIBUTE_IDS comment).
-    _val_lov(gv, "AT_PackDetails", "S")
-
     # AT_PrincipalSize: comma-joined offered-size labels resolved by
     # NewEraOrderFormHWLoader from the O:AN size-grid columns' fill state
     # (see SPECIAL_ATTRIBUTE_IDS / _read_size_grid_fills comments).
@@ -1421,10 +1412,6 @@ def run(args, auditor=None):
     if not generics:
         log.warning("[NewEra-OrderFormHW] No valid generics produced")
         return
-
-    # ── DEV LIMIT: cap to first 5 generics ───────────────────────
-    generics = dict(list(generics.items())[:5])
-    log.info("[NewEra-OrderFormHW] DEV LIMIT: capped to first 5 generic(s)")
 
     sp_code  = season[:2].upper() if len(season) >= 2 else season
     sys_part = season[2:] if len(season) > 2 else ""

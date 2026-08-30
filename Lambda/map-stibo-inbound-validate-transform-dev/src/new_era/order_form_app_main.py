@@ -202,17 +202,84 @@ FORCED_DIRECT_COLUMNS: dict[str, str] = {
 #   AT_ArticleStatus: fixed default LOV id "A".
 #   AT_SAPProductFlag: fixed default LOV id "A".
 #   AT_SportsCategoryEN: fixed default LOV id "06".
-#   AT_PackDetails: fixed default LOV id "S".
+#   AT_PrincipalSize: NOT a single named column — mapping tab's Col J for
+#   Apparel is "Column : O - AN (No Fill Color)": columns O..AN of the
+#   input sheet are the size grid (each column's own header IS a size
+#   label, e.g. "OSFA"/"S"/"634"), and a column counts as offered for a
+#   given row when that cell has NO fill (grayed-out = not applicable to
+#   that item). Resolved by NewEraOrderFormLoader into each row dict
+#   under _SIZE_ROW_KEY (see _read_size_grid_fills) since the normal
+#   Col-J-name lookup can't address a column range or read cell styling.
 #   (all per user direction, 2026-08-19)
 SPECIAL_ATTRIBUTE_IDS: set[str] = {
     "AT_PrincipalAgeDescription", "AT_SAPAge", "AT_Gender", "AT_CountryOrigin",
     "AT_PricingDistributionChannel", "AT_FOB", "AT_FOBCurrency", "AT_MaterialType",
     "AT_SAPArticleCategory", "AT_UOM", "AT_BYArticleType", "AT_BYAge", "AT_BYGender",
     "AT_Content", "AT_Silhouette", "AT_Fit", "AT_CountrySize", "AT_EComAgesCategory", "AT_ArticleStatus",
-    "AT_SAPProductFlag", "AT_SportsCategoryEN", "AT_PackDetails",
+    "AT_SAPProductFlag", "AT_SportsCategoryEN", "AT_PrincipalSize",
     "AT_PrincipalStyleCode", "AT_PrincipalStyleDescription",
     *FORCED_DIRECT_COLUMNS.keys(),
 }
+
+# AT_PrincipalSize size-grid columns (see SPECIAL_ATTRIBUTE_IDS comment above).
+SIZE_GRID_FIRST_COL = "N"
+SIZE_GRID_LAST_COL  = "X"
+# Synthetic key NewEraOrderFormLoader stashes the resolved, comma-joined
+# offered-size string under in each row dict (not a real input column).
+_SIZE_ROW_KEY = "__AT_PrincipalSize__"
+
+
+def _read_size_grid_fills(path: Path, sheet_name: str, header_row_idx: int,
+                           raw_header: tuple) -> dict[int, str]:
+    """
+    Second, non-read-only pass over `sheet_name` limited to the
+    SIZE_GRID_FIRST_COL:SIZE_GRID_LAST_COL columns, for AT_PrincipalSize.
+    openpyxl's read_only/values_only mode (used for everything else in
+    NewEraOrderFormLoader) doesn't expose cell styling at all, so the
+    "no fill = offered" convention from the mapping tab's "Column : O - AN
+    (No Fill Color)" note has to be read separately, here.
+
+    Returns {1-based sheet row number: comma-joined offered size labels},
+    one entry per data row that has at least one offered size. Labels come
+    from `raw_header` at each size-grid column position — those header
+    cells ARE the size labels (e.g. "OSFA", "S", "634"), not a shared
+    "Size" column name.
+    """
+    first_idx0 = openpyxl.utils.column_index_from_string(SIZE_GRID_FIRST_COL) - 1
+    last_idx0  = openpyxl.utils.column_index_from_string(SIZE_GRID_LAST_COL) - 1
+    size_labels = {
+        i: _s(raw_header[i]) for i in range(first_idx0, last_idx0 + 1)
+        if i < len(raw_header) and _s(raw_header[i])
+    }
+    if not size_labels:
+        log.warning(
+            "[NewEra-OrderFormApp] Size grid columns %s:%s have no header labels — "
+            "AT_PrincipalSize will not be sent",
+            SIZE_GRID_FIRST_COL, SIZE_GRID_LAST_COL,
+        )
+        return {}
+
+    result: dict[int, str] = {}
+    wb = openpyxl.load_workbook(path, read_only=False, data_only=True)
+    try:
+        ws = wb[sheet_name]
+        for row_cells in ws.iter_rows(
+            min_row=header_row_idx + 2, min_col=first_idx0 + 1, max_col=last_idx0 + 1,
+        ):
+            offered = []
+            for cell in row_cells:
+                label = size_labels.get(cell.column - 1)
+                if not label:
+                    continue
+                pattern = cell.fill.patternType if cell.fill else None
+                if pattern is None:
+                    offered.append(label)
+            if offered:
+                result[row_cells[0].row] = ",".join(offered)
+    finally:
+        wb.close()
+    return result
+
 
 # ======================================================================
 # XML NAMESPACE
@@ -963,10 +1030,17 @@ class NewEraOrderFormLoader:
                 seen[col] = 0
         self.headers = header
 
-        for r in raw_rows[best_idx + 1:]:
+        # AT_PrincipalSize: resolved from the size-grid columns' fill state
+        # (see _read_size_grid_fills), keyed by 1-based sheet row number so
+        # it can be matched up to each data row below.
+        size_by_row = _read_size_grid_fills(self.path, target, best_idx, raw_header)
+
+        for sheet_row, r in enumerate(raw_rows[best_idx + 1:], start=best_idx + 2):
             if not r or all(c is None for c in r):
                 continue
-            self.rows.append({header[i]: (r[i] if i < len(r) else None) for i in range(len(header))})
+            row_dict = {header[i]: (r[i] if i < len(r) else None) for i in range(len(header))}
+            row_dict[_SIZE_ROW_KEY] = size_by_row.get(sheet_row, "")
+            self.rows.append(row_dict)
 
         log.info("[NewEra-OrderFormApp] Loaded %d data rows", len(self.rows))
 
@@ -1271,7 +1345,9 @@ def build_generic_product(
     _val_lov(gv, "AT_ArticleStatus", "A")
     _val_lov(gv, "AT_SAPProductFlag", "A")
     _val_lov(gv, "AT_SportsCategoryEN", "06")
-    _val_lov(gv, "AT_PackDetails", "S")
+    # AT_PrincipalSize: comma-joined offered-size labels resolved by
+    # _read_size_grid_fills (columns O–AN, no fill = offered).
+    _val_text(gv, "AT_PrincipalSize", row.get(_SIZE_ROW_KEY, ""))
 
     # ── System-level fields: supplied from run() args, not from the
     #    dynamic per-row engine — same convention as every other brand.
@@ -1429,11 +1505,6 @@ def run(args, auditor=None):
     if not generics:
         log.warning("[NewEra-OrderFormApp] No valid generics produced")
         return
-
-    # ── DEV WINDOW: keep only 15th..19th generics (1-based index) ──
-    # Python slicing is 0-based and end-exclusive -> [14:19].
-    generics = dict(list(generics.items())[14:19])
-    log.info("[NewEra-OrderFormApp] DEV WINDOW: selected 15th..19th generic(s)")
 
     sp_code  = season[:2].upper() if len(season) >= 2 else season
     sys_part = season[2:] if len(season) > 2 else ""

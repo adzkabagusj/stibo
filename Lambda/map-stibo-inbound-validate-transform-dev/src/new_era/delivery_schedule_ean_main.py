@@ -55,8 +55,6 @@ for _d in (EAN_DIR, MDD_DIR, XML_OUT_DIR, LOG_DIR):
 BRAND_NAME = "New Era"
 BRAND_CODE = "NRA"
 INPUT_SHEET_NAME = "Sheet1"
-MAX_GENERICS = 1
-MAX_VARIANTS_PER_GENERIC = 4
 
 # ======================================================================
 # XML NAMESPACE
@@ -314,8 +312,6 @@ def group_rows(raw_rows: list[dict], brand_code: str,
 
         variant_key = size_lov_id
         if variant_key not in result[generic_code]["variants"]:
-            if len(result[generic_code]["variants"]) >= MAX_VARIANTS_PER_GENERIC:
-                continue
             result[generic_code]["variants"][variant_key] = {
                 "size_raw": size_raw,
                 "size_lov_id": size_lov_id,
@@ -412,9 +408,6 @@ def run(args, auditor=None):
     if not generics:
         log.warning("[NewEra-DeliveryScheduleEAN] No valid generics/variants produced")
         return
-
-    # DEV LIMIT: only first 2 generics
-    generics = dict(list(generics.items())[:MAX_GENERICS])
 
     xml_filename = f"{ean_file.stem}.xml"
     xml_path = XML_OUT_DIR / xml_filename

@@ -350,7 +350,7 @@ def lambda_handler(event, context, auditor: AuditLogger = None):
         auditor = AuditLogger(event=event, context=context)
         auditor.set_router_context(
             trigger_type="direct_invocation", original_key="",
-            detected_brand="anta_1", routing_decision="anta_1 lambda_handler invoked directly",
+            detected_brand="anta_1", routing_decision="anta lambda_handler invoked directly",
         )
 
     log.info("Event received: %s", json.dumps(event))

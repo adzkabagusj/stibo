@@ -22,14 +22,18 @@ shared brand-mapping workbook, which maps:
     Principal Color Description  ← Color Name
     Principal Gender Description ← Gender
     Principal Age Description    ← Age Group
-    Principal Size               ← Size
+    Principal Size               ← Size Range
     Country of Origin            ← T1 Supplier Country Description
     Principal Merch Hierarchy L1 ← Department
     Principal Merch Hierarchy L2 ← Sports Category
     Principal Merch Hierarchy L3 ← Article Business Segment
     Principal Merch Hierarchy L4 ← Category Marketing Line
-    Sports Category EN           ← Sports Category
+    Sports Category EN           ← Sports Category  (via "Reebok MD
+                                   Mappings sheet 2" → MDD "Sports Category LOV")
     Content / Material           ← Material Composition
+    Country Size                 ← "Formula in System": FW → US, APP → blank
+    E-com Size                   ← Country Size + " " + SAP Size Code
+                                   (per size; MDD "Size Code LOV")
     Launching Date               ← Retail Intro Date
     FOB                          ← Customer Price (USD) (USD)
     Original / Current Price     ← M.S.R.P (USD)
@@ -56,7 +60,10 @@ Scope note (matches current Asics-footwear precedent in this codebase):
     per generic article. Per-SKU variant rows (color+size / UPC) are
     grouped and counted for audit purposes but not yet written as
     individual <Product ParentID="{generic}"> variant elements, since
-    SAP Color/Size resolution isn't available from this input alone.
+    SAP Color resolution ("AI Image Analyst") isn't available from this
+    input alone. AT_EComSize is a per-size value, so it is resolved onto
+    each variant dict by group_rows() and reported in the run summary; it
+    reaches the XML as soon as variant elements are emitted here.
 """
 
 from __future__ import annotations
@@ -190,6 +197,36 @@ SUBCATEGORY_SILHOUETTE_MAP: dict[str, str] = {
 }
 
 
+# Reebok raw "Sports Category" → Stibo "Sports Category EN" display value,
+# per the brand mapping template's "Reebok MD Mappings sheet 2" tab
+# (Reebok Inline, source column "Sports Category"). The display value is
+# then resolved to its AT_SportsCategoryEN LOV ID through the MDD
+# "Sports Category LOV" sheet — see MDDLoader._load_sports_category_lov()
+# and _sports_category_en_lov_id() below. Only the values Reebok's own
+# sheet maps are listed; anything else is left unmapped rather than
+# guessed (the LOV rejects unknown IDs on import).
+SPORTS_CATEGORY_EN_MAP: dict[str, str] = {
+    "RUNNING":         "Running",
+    "TRAINING":        "Fitness / Training",
+    "WALKING":         "Outdoor / Trail / Hiking",
+    "TENNIS":          "Tennis / Padel",
+    "BASKETBALL":      "Basketball",
+    "CASUAL":          "Lifestyle / Casual",
+    "SWIM":            "Swimming",
+    "OUTDOOR":         "Outdoor / Trail / Hiking",
+    "FOOTBALL/SOCCER": "Soccer",
+    "GOLF":            "Golf",
+    "SKATE":           "Lifestyle / Casual",
+}
+
+# AT_CountrySize — "Formula in System" per the Reebok(Inline) sheet, which
+# spells the rule out per product type: "FW: US / APP: / ACC:" (the same
+# table appears as the "Country Size" column of "Reebok MD Mappings
+# sheet 1": FW→US, APP→blank, AC→blank). Footwear is a flat "US"; the ID
+# is validated against the MDD "Country Size LOV" before it's written.
+COUNTRY_SIZE = "US"
+
+
 def _s(v) -> str:
     """Clean string value — returns empty string for None/nan/empty."""
     if v is None:
@@ -290,6 +327,70 @@ def _top_material(material_composition: str) -> str:
     return re.sub(r"\s+\d+\s*$", "", name).strip()
 
 
+def _lov_codes(mdd, lov_name: str) -> set[str]:
+    """Set of valid LOV IDs for an MDD sheet-backed LOV (values of the
+    display→ID map loaded by MDDLoader)."""
+    lov = (mdd.lovs.get(lov_name, {}) if mdd else {})
+    return {str(v).strip() for v in lov.values() if str(v).strip()}
+
+
+def _sports_category_en_lov_id(sports_category: str, mdd=None) -> str:
+    """Reebok "Sports Category" → AT_SportsCategoryEN LOV ID.
+
+    Two hops, both taken from the shared mapping workbook:
+      1. raw value → Stibo display value   (SPORTS_CATEGORY_EN_MAP,
+         "Reebok MD Mappings sheet 2")
+      2. display value → numeric LOV ID    (MDD "Sports Category LOV")
+    Single-digit IDs are zero-padded to two chars, matching the LOV IDs
+    Stibo accepts (same rule as asics/footwear_main.py). Returns "" when
+    either hop misses, so the caller skips the attribute.
+    """
+    raw = re.sub(r"\s+", " ", _s(sports_category)).strip().upper()
+    if not raw:
+        return ""
+    display = SPORTS_CATEGORY_EN_MAP.get(raw)
+    if not display:
+        return ""
+    lov = (mdd.lovs.get("SportsCategoryLOV", {}) if mdd else {})
+    lov_id = _s(lov.get(display.upper(), ""))
+    if len(lov_id) == 1 and lov_id.isdigit():
+        lov_id = f"0{lov_id}"
+    return lov_id
+
+
+def _country_size_lov_id(mdd=None) -> str:
+    """COUNTRY_SIZE validated against the MDD "Country Size LOV". Returns
+    "" when the module has no default (Apparel) or the ID isn't in the LOV."""
+    if not COUNTRY_SIZE:
+        return ""
+    return COUNTRY_SIZE if COUNTRY_SIZE in _lov_codes(mdd, "CountrySizeLOV") else ""
+
+
+def _ecom_size(country_size: str, sap_size_code: str) -> str:
+    """AT_EComSize — "Formula: (Country Size)(Space)(SAP Size Code)" per the
+    Reebok(Inline) sheet. With no Country Size (Apparel) this collapses to
+    the bare SAP size code."""
+    code = _s(sap_size_code)
+    if not code:
+        return ""
+    return f"{_s(country_size)} {code}".strip()
+
+
+def _resolve_size_lov_id(size_raw: str, size_lov: dict | None) -> str:
+    """Raw "Size" cell → SAP Size Code (MDD "Size Code LOV" ID). Same
+    lookup as reebok/ean_main.py — no fallback formula, an unmatched size
+    yields "" so no E-com Size is fabricated for it."""
+    if not size_lov:
+        return ""
+    s = _s(size_raw).upper()
+    if not s:
+        return ""
+    if s in size_lov:
+        return size_lov[s]
+    stripped = s.lstrip("0") or "0"
+    return size_lov.get(stripped, "")
+
+
 # ======================================================================
 # MDD LOADER
 # ======================================================================
@@ -319,6 +420,9 @@ class MDDLoader:
         self._load_brand_status_lov(wb)
         self._load_brand_category_lov(wb)
         self._load_brand_group_lov(wb)
+        self._load_sports_category_lov(wb)
+        self._load_country_size_lov(wb)
+        self._load_size_code_lov(wb)
 
         wb.close()
         log.info("[MDD] %d LOV types loaded", len(self.lovs))
@@ -558,6 +662,100 @@ class MDDLoader:
         self.lovs["AT_BrandGroup"] = lov_map
         log.info("[MDD] Brand Group LOV — %d entries", len(lov_map))
 
+    def _load_sports_category_lov(self, wb):
+        """Sports Category LOV: Col A = display value, Col B = LOV ID.
+
+        Loaded explicitly because the sheet's column order is the reverse
+        of the ID-then-name layout _load_named_lov_sheets() assumes.
+        """
+        sheet = next(
+            (s for s in wb.sheetnames if s.strip().upper() == "SPORTS CATEGORY LOV"),
+            next((s for s in wb.sheetnames
+                  if "SPORTS" in s.upper() and "CATEGORY" in s.upper() and "LOV" in s.upper()), None),
+        )
+        if not sheet:
+            log.warning("[MDD] Sports Category LOV sheet not found — AT_SportsCategoryEN will be skipped")
+            return
+        lov: dict[str, str] = {}
+        for row in list(wb[sheet].iter_rows(values_only=True))[1:]:
+            if not row or len(row) < 2:
+                continue
+            display = str(row[0]).strip() if row[0] else ""
+            lov_id  = str(row[1]).strip() if row[1] else ""
+            if display and lov_id:
+                lov[display.upper()] = lov_id
+        self.lovs["SportsCategoryLOV"] = lov
+        log.info("[MDD] Sports Category LOV: %d entries", len(lov))
+
+    def _load_country_size_lov(self, wb):
+        """Country Size LOV: Col A = display value, Col B = LOV ID (same
+        reversed layout as Sports Category LOV)."""
+        sheet = next(
+            (s for s in wb.sheetnames if s.strip().upper() == "COUNTRY SIZE LOV"),
+            next((s for s in wb.sheetnames
+                  if "COUNTRY" in s.upper() and "SIZE" in s.upper() and "LOV" in s.upper()), None),
+        )
+        if not sheet:
+            log.warning("[MDD] Country Size LOV sheet not found — AT_CountrySize will be skipped")
+            return
+        lov: dict[str, str] = {}
+        for row in list(wb[sheet].iter_rows(values_only=True))[1:]:
+            if not row or len(row) < 2:
+                continue
+            display = str(row[0]).strip() if row[0] else ""
+            lov_id  = str(row[1]).strip() if row[1] else ""
+            if display and lov_id:
+                lov[display.upper()] = lov_id
+        self.lovs["CountrySizeLOV"] = lov
+        log.info("[MDD] Country Size LOV: %d entries", len(lov))
+
+    def _load_size_code_lov(self, wb):
+        """Size Code LOV: raw "Size" cell → SAP Size Code, for the
+        AT_EComSize formula.
+
+        The sheet carries the same table twice in different column pairs.
+        Col F/G (LOV ID / description) is the pair reebok/ean_main.py reads
+        for this very same input file, so it wins; but it covers only ~864
+        mostly-numeric footwear codes and has no plain S / M / L / XL / XS,
+        which is what the apparel export's "Size" column contains. Col A/B
+        holds the fuller table, so it's merged in as a fallback — limited to
+        rows whose Size Code *equals* its description (S→S, 2XL→2XL). Col
+        A/B also carries alias rows like "/24" → "S." and "#01" → "8" whose
+        IDs belong to other size systems entirely; taking only self-coded
+        rows keeps those out.
+        """
+        if "Size Code LOV" not in wb.sheetnames:
+            log.warning("[MDD] 'Size Code LOV' sheet not found — AT_EComSize will be skipped")
+            return
+
+        def _key(desc) -> str:
+            k = str(desc).strip().upper()
+            return k[:-1] if k.endswith(".") else k
+
+        rows = list(wb["Size Code LOV"].iter_rows(values_only=True))[1:]
+        lov: dict[str, str] = {}
+
+        for row in rows:                                   # Col F/G — primary
+            if not row or len(row) < 7 or row[5] is None or row[6] is None:
+                continue
+            lid, key = str(row[5]).strip(), _key(row[6])
+            if key and lid:
+                lov.setdefault(key, lid)                   # first occurrence wins
+        primary = len(lov)
+
+        for row in rows:                                   # Col A/B — self-coded only
+            if not row or len(row) < 2 or row[0] is None or row[1] is None:
+                continue
+            lid, key = str(row[0]).strip(), _key(row[1])
+            if key and lid.upper() == key:
+                lov.setdefault(key, lid)
+
+        self.lovs["SizeCodeLOV"] = lov
+        log.info(
+            "[MDD] Size Code LOV: %d entries (%d from col F/G, %d added from col A/B)",
+            len(lov), primary, len(lov) - primary,
+        )
+
     def lookup(self, lov_key: str, display_value: str) -> str:
         """Look up a LOV ID. Returns display_value unchanged if not found."""
         lov = self.lovs.get(lov_key, {})
@@ -787,8 +985,18 @@ class ArticleMasterLoader:
 # GROUPER — flat SKU rows → Generic articles + variant counts
 # ======================================================================
 
-def group_rows(raw_rows: list[dict], loader: ArticleMasterLoader, brand_code: str) -> dict[str, dict]:
-    """Group flat per-SKU rows into Generic articles keyed by brand_code + Article Number."""
+def group_rows(
+    raw_rows: list[dict],
+    loader: ArticleMasterLoader,
+    brand_code: str,
+    mdd: "MDDLoader | None" = None,
+) -> dict[str, dict]:
+    """Group flat per-SKU rows into Generic articles keyed by brand_code + Article Number.
+
+    `mdd` is used for the per-variant SAP Size Code lookup that feeds
+    AT_EComSize — see _resolve_size_lov_id() / _ecom_size().
+    """
+    size_lov = mdd.lovs.get("SizeCodeLOV", {}) if mdd else {}
     col_article  = loader.find_col("Article Number")
     col_style_no = loader.find_col("Style Number")
     col_name     = loader.find_col("Name")
@@ -796,6 +1004,7 @@ def group_rows(raw_rows: list[dict], loader: ArticleMasterLoader, brand_code: st
     col_gender   = loader.find_col("Gender")
     col_age      = loader.find_col("Age Group")
     col_size     = loader.find_col("Size")
+    col_size_rng = loader.find_col("Size Range")
     col_upc      = loader.find_col("UPC")
     col_sku      = loader.find_col("SKU")
     col_coo      = loader.find_col("T1 Supplier Country Description")
@@ -845,7 +1054,10 @@ def group_rows(raw_rows: list[dict], loader: ArticleMasterLoader, brand_code: st
                 "color_name":       _s(row.get(col_color, "")) if col_color else "",
                 "gender":           _s(row.get(col_gender, "")) if col_gender else "",
                 "age_group":        _s(row.get(col_age, "")) if col_age else "",
-                "principal_size":   _s(row.get(col_size, "")) if col_size else "",
+                # AT_PrincipalSize ← "Size Range" per Reebok(Inline) mapping
+                # sheet (NOT the "Size" column, which feeds the variant/
+                # Principal Barcode size code below).
+                "principal_size":   _s(row.get(col_size_rng, "")) if col_size_rng else "",
                 "country_origin":   _s(row.get(col_coo, "")) if col_coo else "",
                 "department":       _s(row.get(col_dept, "")) if col_dept else "",
                 "sports_category":  _s(row.get(col_sports, "")) if col_sports else "",
@@ -866,17 +1078,32 @@ def group_rows(raw_rows: list[dict], loader: ArticleMasterLoader, brand_code: st
         size_code  = _s(row.get(col_size, ""))  if col_size  else ""
         upc        = _s(row.get(col_upc, ""))   if col_upc   else ""
         sku        = _s(row.get(col_sku, ""))   if col_sku   else ""
+        # AT_EComSize = "(Country Size)(Space)(SAP Size Code)" per the
+        # Reebok(Inline) sheet. It's a per-size (variant) value, so it's
+        # resolved here alongside the size rather than on the generic —
+        # see the scope note in the module docstring for where it lands.
+        sap_size_code = _resolve_size_lov_id(size_code, size_lov)
         variant_key = f"{generic_key}|{color_code}|{size_code}"
         result[generic_key]["variants"][variant_key] = {
-            "color_name": color_code,
-            "size":       size_code,
-            "upc":        upc,
-            "sku":        sku,
+            "color_name":    color_code,
+            "size":          size_code,
+            "sap_size_code": sap_size_code,
+            "ecom_size":     _ecom_size(COUNTRY_SIZE, sap_size_code),
+            "upc":           upc,
+            "sku":           sku,
         }
 
+    ecom_sized = sum(
+        1 for g in result.values() for v in g["variants"].values() if v["ecom_size"]
+    )
+    total_variants = sum(len(g["variants"]) for g in result.values())
     log.info(
         "[Grouper] %d rows → %d generics, %d total variants",
-        len(raw_rows), len(result), sum(len(g["variants"]) for g in result.values()),
+        len(raw_rows), len(result), total_variants,
+    )
+    log.info(
+        "[Grouper] E-com Size resolved for %d/%d variants (country_size=%r)",
+        ecom_sized, total_variants, COUNTRY_SIZE,
     )
     return result
 
@@ -1020,8 +1247,17 @@ def build_product_xml(
         _val_text(gv, "AT_PrincipalMerchandiseHierarchyL2", generic["sports_category"])
         # AT_SportsCategoryEN is an LOV attribute in Stibo, not free text —
         # writing the raw "Sports Category" string as-is threw "Illegal LOV"
-        # on import. Left unmapped/blank until a real value→LOV table exists.
-        # _val_text(gv, "AT_SportsCategoryEN", generic["sports_category"])
+        # on import. It now goes through SPORTS_CATEGORY_EN_MAP ("Reebok MD
+        # Mappings sheet 2") and the MDD "Sports Category LOV".
+        sports_cat_lov_id = _sports_category_en_lov_id(generic["sports_category"], mdd)
+        if sports_cat_lov_id:
+            _val_lov(gv, "AT_SportsCategoryEN", sports_cat_lov_id)
+        else:
+            log.warning(
+                "[XML] Sports Category '%s' has no Sports Category EN LOV ID — "
+                "AT_SportsCategoryEN skipped for %s",
+                generic["sports_category"], generic["generic_key"],
+            )
     if generic.get("segment"):
         _val_text(gv, "AT_PrincipalMerchandiseHierarchyL3", generic["segment"])
     if generic.get("mkt_line"):
@@ -1053,6 +1289,17 @@ def build_product_xml(
     # system default, NOT sourced from the brand file's "Sales Unit" column
     # (which for footwear can be "PAA", not a valid AT_UOM LOV ID).
     _val_lov(gv, "AT_UOM", "EA")
+
+    # ── Country Size ("Formula in System": FW → US, APP/ACC → blank) ──
+    country_size_id = _country_size_lov_id(mdd)
+    if country_size_id:
+        _val_lov(gv, "AT_CountrySize", country_size_id)
+    elif COUNTRY_SIZE:
+        log.warning(
+            "[XML] Country Size '%s' not found in MDD Country Size LOV — "
+            "AT_CountrySize skipped for %s",
+            COUNTRY_SIZE, generic["generic_key"],
+        )
 
     # ── Country of Origin: T1 Supplier Country Description → ISO code ──
     if generic.get("country_origin"):
@@ -1373,7 +1620,8 @@ def run(args, auditor=None):
         return None
 
     raw_rows = loader.df.to_dict("records")
-    generics = group_rows(raw_rows, loader, brand_lov_id)
+    generics = group_rows(raw_rows, loader, brand_lov_id, mdd=mdd)
+    # generics = dict(list(generics.items())[:5])  # TEST LIMIT — uncomment to process only first 5 products
 
     if not generics:
         log.warning("[ReebokFootwear] No valid generics produced")
@@ -1387,7 +1635,7 @@ def run(args, auditor=None):
     xml_filename = f"{input_file.stem}.xml"
     xml_path     = XML_OUT_DIR / xml_filename
     export_time  = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
-    generic_count = variant_count = 0
+    generic_count = variant_count = ecom_size_count = 0
 
     cls_el  = build_classifications(brand, brand_lov_id, season)
     cls_str = _XMLNS_RE.sub("", ET.tostring(cls_el, encoding="unicode"))
@@ -1420,6 +1668,9 @@ def run(args, auditor=None):
                 f.write(f"    {_XMLNS_RE.sub('', px)}\n")
                 generic_count += 1
                 variant_count += len(generic["variants"])
+                ecom_size_count += sum(
+                    1 for v in generic["variants"].values() if v.get("ecom_size")
+                )
 
         f.write("  </Products>\n</STEP-ProductInformation>\n")
 
@@ -1430,6 +1681,7 @@ def run(args, auditor=None):
         f"  Input rows : {len(raw_rows)}\n"
         f"  Generics   : {generic_count}\n"
         f"  Variants   : {variant_count} (tracked only — not yet emitted as XML)\n"
+        f"  E-com Size : {ecom_size_count}/{variant_count} variants resolved\n"
         f"  XML size   : {file_kb} KB",
         flush=True,
     )

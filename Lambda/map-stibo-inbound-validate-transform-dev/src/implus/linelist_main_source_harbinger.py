@@ -38,14 +38,14 @@ Harbinger sheet layout (row 20 = header):
 Stibo Attribute ID                | Field Name in Harbinger Source
 ---------------------------------------------------------------------------------
 AT_PrincipalStyleCode             | IMPLUS EU ITEM # (first variant of the style/color group)
-AT_PrincipalStyleDescription      | L1 + L2 + PRODUCT DESCRIPTION (space-joined, per Stibo team)
+AT_PrincipalStyleDescription      | L1 + L2 + PRODUCT DESCRIPTION + SIZE (space-joined, per Stibo team)
 AT_PrincipalColorName             | COLOR
 AT_PrincipalColorCode             | Not sent (mapping logic N/A for Harbinger, per Stibo team)
 AT_FOB                            | DISTRIBUTOR PRICE
 AT_FOBCurrency                    | USD (Default)
 AT_PrincipalMerchandiseHierarchyL1| Category (col A)
 AT_PrincipalMerchandiseHierarchyL2| Sub-category banner text (col B)
-AT_PrincipalMerchandiseHierarchyL3| L1 + L2 + PRODUCT DESCRIPTION (same formula as StyleDescription)
+AT_PrincipalMerchandiseHierarchyL3| L1 + L2 + PRODUCT DESCRIPTION + SIZE (same formula as StyleDescription)
 AT_CountryOrigin                  | HK (Default)
 AT_Gender                         | Unisex (Default -- U)
 AT_SAPAge                         | Adults (Default -- AD)
@@ -245,10 +245,16 @@ def load_linesheet(path: Path) -> list[HarbingerRow]:
 
 
 def group_generics(rows: list[HarbingerRow]) -> dict[str, dict[str, HarbingerGenericGroup]]:
+    # Grouping key = IMPLUS EU ITEM # (falls back to IMPLUS US ITEM #, then
+    # row_num). Each item number is a distinct article (one number per size
+    # break) and is the same value that anchors KEY_InboundArticle /
+    # AT_PrincipalStyleCode (brand_code + implus_eu). Grouping by style
+    # description instead would wrongly collapse every size break of the
+    # same style into one product.
     groups: dict[str, dict[str, HarbingerGenericGroup]] = defaultdict(dict)
     for r in rows:
         style_desc = r.style_desc or f"UNKNOWN_{r.row_num}"
-        style_key = f"{r.major_category.upper()}|{style_desc.upper()}"
+        style_key = r.implus_eu or r.implus_us or f"UNKNOWN_{r.row_num}"
         color = r.color or "NC"
 
         if color not in groups[style_key]:
@@ -335,9 +341,14 @@ def _build_generic_product(group: HarbingerGenericGroup, cfg: dict) -> ET.Elemen
     # ── Principal Attributes ─────────────────────────────────────────────────
     # AT_PrincipalStyleDescription / AT_PrincipalMerchandiseHierarchyL3: per
     # Stibo team feedback, Harbinger builds both from the same formula --
-    # L1 + L2 + Product Description (space-joined, skipping empty parts).
+    # L1 + L2 + Product Description + Size (space-joined, skipping empty
+    # parts). Size comes from the first variant, same source as
+    # AT_PrincipalSize below.
     l1_l2_desc = " ".join(
-        p for p in (group.hierarchy_l1, group.hierarchy_l2, group.style_desc) if p
+        p for p in (
+            group.hierarchy_l1, group.hierarchy_l2, group.style_desc,
+            first_var.size if first_var else "",
+        ) if p
     )
     _val(vals_el, "AT_PrincipalStyleCode",        group.implus_eu)
     _val(vals_el, "AT_PrincipalStyleDescription", l1_l2_desc)
@@ -407,7 +418,7 @@ def build_xml(rows: list[HarbingerRow], out_xml_path: Path, cfg: dict) -> None:
     # ══════════════════════════════════════════════════════════════════════════
     # TEST LIMITER — Set TEST_MODE = False for production
     # ══════════════════════════════════════════════════════════════════════════
-    TEST_MODE = True
+    TEST_MODE = False
     LIMIT = 5
 
     if TEST_MODE:

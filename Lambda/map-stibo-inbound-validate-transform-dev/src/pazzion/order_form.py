@@ -1412,8 +1412,8 @@ def _determine_parent_id(row_data: dict, source_sheet: str) -> str:
     defaulted EVERY row — including all "Bag" rows — to Footwear. That
     broke both AT_Material (Bags need the brand mapping sheet's "ACC (non
     FW)" reference column, not the Footwear one — lookups against the
-    wrong table just come back empty) and AT_CountrySize (which must not
-    be sent at all for Bags/Accessories — see below).
+    wrong table just come back empty) and AT_CountrySize (which must use
+    a different default ID for Bags/Accessories — see below).
 
     PPH division letter convention (shared across brands — see e.g.
     dr_marten/retail_price_master_main.py's DIVISION_PARENT_MAP):
@@ -1788,13 +1788,13 @@ def _add_product_values(
             log.warning("[Material] No mapping found for raw upper material '%s' (footwear=%s)",
                         material_upper_raw, is_footwear)
 
-    # ── Country Size (Footwear only) ────────────────────────────────
-    # Footwear -> EUR ('EU'). The brand mapping sheet's cell text says
-    # "Acc: No Size", but per corrected guidance AT_CountrySize must not
-    # be sent at all for Accessories/Bags — not even with a "No Size" ID —
-    # so it's intentionally omitted rather than sent as id_val="NS".
+    # ── Country Size ──────────────────────────────────────────────
+    # Footwear -> 'EU'. Accessories/Bags -> 'NS' (No Size), per the
+    # brand mapping sheet's "Acc: No Size" cell text.
     if _determine_parent_id(row_data, source_sheet) == "PPH_F-TempSubCat":
         _w("AT_CountrySize", id_val="EU")
+    else:
+        _w("AT_CountrySize", id_val="NS")
 
     # ── Retail Price Currency (from country code) ───────────────
     currency_lov_id = _resolve_currency_from_country(country_code)

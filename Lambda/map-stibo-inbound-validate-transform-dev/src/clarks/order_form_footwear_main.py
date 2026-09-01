@@ -48,10 +48,9 @@ SAP Color Code derivation:
   • Fallback: last 3 digits of ColourID (e.g. 312007 → "007")
 
 Care Instruction EN (AT_CareInstructionEN):
-  Derived from `program` value per brand mapping logic:
-  • Sock / Crew Sock / Sport Ankle Sock / Sock Liner → sock care wording
-  • Shoe Care                                         → shoe care wording
-  • All others                                        → general acc wording
+  Derived from `Prod Type` column value per brand mapping logic:
+  • Sandals / Shoes / Canvas / Trainers / Boots → footwear care wording
+  • All others                                  → not sent (attribute omitted)
 """
 
 from __future__ import annotations
@@ -147,24 +146,23 @@ _CARE_FOOTWEAR = (
 )
 
 
-def _care_instruction_en(program_val: str) -> str:
-    """Return Care Instruction EN text based on program value.
+def _care_instruction_en(prod_type_val: str) -> str:
+    """Return Care Instruction EN text based on Prod Type column value.
 
     Rules:
       - Sandals / Shoes / Canvas / Trainers / Boots → footwear care instructions
-      - Anything else → pass through the raw program value as-is
+      - Anything else → not sent (empty string)
     """
-    if not program_val:
+    if not prod_type_val:
         return ""
 
-    raw = str(program_val).strip()
-    p = raw.lower()
+    p = str(prod_type_val).strip().lower()
 
     # Check for footwear products
     if p in _FOOTWEAR_PROGRAM_VALUES:
         return _CARE_FOOTWEAR
 
-    return raw
+    return ""
 
 
 # ======================================================================
@@ -1213,8 +1211,8 @@ def group_rows(
                     heel_height_raw, heel_height_lov_name, heel_height_lov_id,
                 )
 
-            # Care instruction from program
-            care_en = _care_instruction_en(program)
+            # Care instruction from Prod Type
+            care_en = _care_instruction_en(prod_type)
 
             # Style LOV value from program (via RNA mapping)
             style_value = ""

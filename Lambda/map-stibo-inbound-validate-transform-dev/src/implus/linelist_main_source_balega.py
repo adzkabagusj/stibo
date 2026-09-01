@@ -178,6 +178,7 @@ class implusGenericGroup:
     hierarchy_l1:      str
     color:             str = ""
     color_code:        str = ""
+    principal_style_description: str = ""
     variants:          list[implusRow] = field(default_factory=list)
 
 
@@ -742,6 +743,27 @@ def load_linesheet(path: Path) -> list[implusRow]:
         log.warning("Could not find header row. Defaulting to row 20.")
         header_row_idx = 20
 
+    # Some files place the section banner (e.g. "ULTRA LIGHT NO SHOW")
+    # directly above the header row rather than interspersed among the
+    # data rows below it — the main loop below only starts scanning after
+    # the header, so that banner would otherwise never be seen and L1
+    # would stay blank for the whole sheet. Pre-scan rows above the
+    # header for the last black-filled banner row and seed current_l1.
+    for row_idx in range(1, header_row_idx):
+        row = [c.value for c in next(ws.iter_rows(min_row=row_idx, max_row=row_idx))]
+        cell_0 = _clean_str(row[0]) if len(row) > 0 else ""
+        cell_1 = _clean_str(row[1]) if len(row) > 1 else ""
+        cell_2 = _clean_str(row[2]) if len(row) > 2 else ""
+        cell_4 = _clean_str(row[4]) if len(row) > 4 else ""
+        if (cell_1 or cell_0) and not cell_2 and not cell_4:
+            header_title = cell_1 or cell_0
+            if "TOTAL" not in header_title.upper() and "COLOR CODE" not in header_title.upper():
+                banner_cell = ws.cell(row=row_idx, column=2)
+                log_ctx = f" row={row_idx} text='{header_title}' (pre-header scan)"
+                if _is_black_fill(banner_cell, log_ctx):
+                    current_l1 = header_title
+                    log.info("[Balega] L1 seeded from pre-header banner -> '%s' (row %d)", current_l1, row_idx)
+
     for row_idx, row in enumerate(ws.iter_rows(min_row=header_row_idx + 1, values_only=True), start=header_row_idx + 1):
         cell_0 = _clean_str(row[0])
         cell_1 = _clean_str(row[1])
@@ -813,6 +835,7 @@ def group_generics(rows: list[implusRow]) -> dict[str, dict[str, implusGenericGr
             groups[style_code][color] = implusGenericGroup(
                 implus_us=style_code,
                 style_desc=r.style_desc,
+                principal_style_description=f"{r.style_desc} {r.size}".strip(),
                 hierarchy_l1=r.hierarchy_l1,
                 color=color,
                 color_code=r.color_code
@@ -1177,7 +1200,7 @@ def _build_generic_product(group: implusGenericGroup, cfg: dict) -> ET.Element:
 
     # ── Principal Attributes ─────────────────────────────────────────────────
     _val(vals_el, "AT_PrincipalStyleCode",        group.implus_us)
-    _val(vals_el, "AT_PrincipalStyleDescription", group.style_desc)
+    _val(vals_el, "AT_PrincipalStyleDescription", group.principal_style_description)
     if group.color_code:
         _val(vals_el, "AT_PrincipalColorCode", group.color_code)
     if group.color:

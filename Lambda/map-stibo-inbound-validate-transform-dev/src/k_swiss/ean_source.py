@@ -482,7 +482,7 @@ def build_xml(generics: dict[str, GenericGroup], out_path: Path) -> tuple[int, i
     # Caps output to PRODUCT_LIMIT generics, each truncated to at most
     # VARIANT_PER_PRODUCT_LIMIT of its variants (not all 12-15 real sizes).
     # ══════════════════════════════════════════════════════════════════════
-    TEST_MODE = True
+    TEST_MODE = False
     PRODUCT_LIMIT = 1
     VARIANT_PER_PRODUCT_LIMIT = 3
 

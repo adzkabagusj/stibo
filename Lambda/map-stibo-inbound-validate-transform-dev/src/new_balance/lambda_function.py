@@ -1219,6 +1219,7 @@ os.environ["LAMBDA_TMP_DIR"] = TMP_WORKDIR
 import new_balance.inline_main_accessories           as etl_apparel        # NB inline apparel & accessories
 import new_balance.inline_main_footwear  as etl_footwear        # NB inline footwear
 import new_balance.inline_gtm_footwear_main as etl_footwear_gtm # NB inline footwear GTM line sheet
+import new_balance.inline_appacc_preline_main as etl_appacc_preline  # NB inline App/Acc Preline line list
 import new_balance.licensed_linelist_main  as etl_licensed_list   # NB licensed line list
 import new_balance.licensed_ecommerce_main as etl_ecommerce       # NB ecommerce export
 import new_balance.inline_ecommerce_main as etl_inline_ecommerce  # NB inline ecommerce export
@@ -1308,6 +1309,20 @@ FILE_TYPE_KEYWORDS: dict[str, list[str]] = {
         "footwear",
         "shoes",
     ],
+    # ── 1b. App/Acc Preline line list (more specific than plain apparel) ───
+    "linelist_appacc_preline": [
+        # Production names use "Line List App Acc - Updated ...", the frontend
+        # label says "Line List (App Acc Preline - Updated)". Cover both.
+        "line list app acc",
+        "linelist app acc",
+        "line list (app acc",
+        "linelist (app acc",
+        "app acc preline",
+        "appacc preline",
+        "preline linelist",
+        "preline line list",
+        "preline",
+    ],
     # ── 2. Apparel & Accessories ──────────────────────────────────────────
     "linelist_apparel": [
         "line list (apparel",        # covers "Line List (Apparel & Accessories)"
@@ -1375,6 +1390,7 @@ ETL_DISPATCHER: dict[str, object] = {
     "linelist_apparel":   etl_apparel,
     "linelist_footwear":  etl_footwear,
     "linelist_footwear_gtm": etl_footwear_gtm,
+    "linelist_appacc_preline": etl_appacc_preline,
     "linelist_licensed":  etl_licensed_list,
     "ecommerce_licensed": etl_ecommerce,
     "ecommerce_inline":   etl_inline_ecommerce,
@@ -1387,6 +1403,7 @@ ETL_TYPE_SBU: dict[str, str] = {
     "linelist_apparel":   "AP",
     "linelist_footwear":  "FW",
     "linelist_footwear_gtm": "FW",
+    "linelist_appacc_preline": "AP",
     "linelist_licensed":  "SP",
     "ecommerce_licensed": "SP",
     "ecommerce_inline":   "SP",
@@ -1407,6 +1424,7 @@ REQUIRED_TYPES_BY_TRIGGER: dict[str, set[str]] = {
     "linelist_apparel":   {"linelist_apparel",   "mdd", "attributes"},
     "linelist_footwear":  {"linelist_footwear",  "mdd", "attributes"},
     "linelist_footwear_gtm": {"linelist_footwear_gtm", "mdd", "attributes"},
+    "linelist_appacc_preline": {"linelist_appacc_preline", "mdd", "attributes"},
     "linelist_licensed":  {"linelist_licensed",  "mdd", "attributes"},
     "ecommerce_licensed": {"ecommerce_licensed", "mdd", "attributes"},
     "ecommerce_inline":   {"ecommerce_inline",   "mdd", "attributes"},
@@ -1516,6 +1534,17 @@ def _detect_file_type(filename: str) -> str | None:
     if has_gtm and has_fw_list and not has_apparel:
         return "linelist_footwear_gtm"
 
+    # App/Acc line list — "App Acc" or "Preline" anywhere alongside a line-list
+    # token. Guarded so it cannot swallow the plain
+    # "Line List (Apparel & Accessories)" file, whose text has no "app acc".
+    has_app_acc = re.search(r'\bapp\s*acc\b', name_norm) is not None
+    has_preline = "preline" in name_norm
+    has_list    = any(
+        k in name_norm for k in ("line list", "linelist", "line sheet")
+    )
+    if (has_app_acc or has_preline) and has_list and not has_gtm:
+        return "linelist_appacc_preline"
+
     if has_ean_source:
         return "ean_source"
     if has_ecomm_file and has_licensed and not has_inline:
@@ -1535,6 +1564,15 @@ def _detect_file_type(filename: str) -> str | None:
                 if ftype == "ecommerce" and (
                     "inline"   in name_norm or
                     "licensed" in name_norm
+                ):
+                    continue
+                # The bare "inline" keyword under ecommerce_inline matches ANY
+                # NB filename containing "Inline" — which is most line lists.
+                # Only let it win when the name really is an ecommerce export.
+                if (
+                    ftype == "ecommerce_inline"
+                    and kw_norm == "inline"
+                    and not any(e in name_norm for e in ("ecomm", "ecommerce"))
                 ):
                     continue
                 # ───────────────────────────────────────────────────────
@@ -1591,7 +1629,7 @@ def _list_principal_files(bucket: str, principal: str) -> dict[str, dict]:
             filename = Path(key).name
             if not filename:
                 continue
-            if not filename.lower().endswith((".xlsx", ".xlsb", ".csv")):
+            if not filename.lower().endswith((".xlsx", ".xlsm", ".xlsb", ".csv")):
                 continue
 
             ftype = _detect_file_type(filename)
@@ -1623,7 +1661,7 @@ def _list_principal_files(bucket: str, principal: str) -> dict[str, dict]:
             filename = Path(key).name
             if not filename:
                 continue
-            if not filename.lower().endswith((".xlsx", ".xlsb", ".csv")):
+            if not filename.lower().endswith((".xlsx", ".xlsm", ".xlsb", ".csv")):
                 continue
 
             ftype = _detect_file_type(filename)
@@ -1660,7 +1698,7 @@ def _check_mandatory_files(found: dict[str, dict], triggered_ftype: str | None) 
     missing = list(REQUIRED_NON_LINELIST_TYPES - set(found.keys()))
     has_any_brand_file = any(
         k in found for k in ("linelist_apparel", "linelist_footwear",
-                            "linelist_footwear_gtm",
+                            "linelist_footwear_gtm", "linelist_appacc_preline",
                             "linelist_licensed", "ecommerce_licensed",
                             "ecommerce_inline", "linelist","ean_source","ordersheet_licensed")  # ← replace "ecommerce"
     )
@@ -1688,6 +1726,7 @@ def _prepare_tmp_dirs() -> dict[str, Path]:
         "linelist_apparel":   base / "input" / "linelist_apparel",
         "linelist_footwear":  base / "input" / "linelist_footwear",
         "linelist_footwear_gtm": base / "input" / "linelist_footwear_gtm",
+        "linelist_appacc_preline": base / "input" / "linelist_appacc_preline",
         "linelist_licensed":  base / "input" / "linelist_licensed",
         "ecommerce_licensed": base / "input" / "ecommerce_licensed",
         "ecommerce_inline":   base / "input" / "ecommerce_inline",
@@ -1794,7 +1833,7 @@ def _parse_season_from_header(header: str) -> str | None:
         return f"{prefix}{m.group(2)}"
 
     # ── ADD: Carry Over / Collection season codes ─────────────────
-    m = re.search(r'\b(CO|HO|AL|SM|SP|SU|FA|WN)(20\d{2}|\d{2})\b', header, re.IGNORECASE)
+    m = re.search(r'\b(CO|HO|AL|SM|SP|SU|FA|FL|WN)(20\d{2}|\d{2})\b', header, re.IGNORECASE)
     if m:
         prefix = m.group(1).upper()
         year   = m.group(2)
@@ -1853,7 +1892,7 @@ def _parse_metadata_from_linelist_filename(
     Unchanged logic from both originals — unified here.
     """
     stem = linelist_filename
-    for ext in (".xlsx", ".csv", ".xlsb"):
+    for ext in (".xlsx", ".xlsm", ".csv", ".xlsb"):
         if stem.lower().endswith(ext):
             stem = stem[: -len(ext)]
             break
@@ -1865,7 +1904,9 @@ def _parse_metadata_from_linelist_filename(
         r'-(?P<brand>.+?)'
         r'-(?P<file_type>.+?)'
         r'-(?P<multi_mono>[^-]+)'
-        r'-(?P<season>(SS|FW|AW|HO|AL|CO|WN|SM|SP|SU|FA)\d{2,4})'  # e.g. SP2028, FW26, SS27
+        # Prefixes cover the MDD "Season LOV" codes (SP SM FL WN CO SS FW AL)
+        # plus legacy aliases already in use (AW HO SU FA).
+        r'-(?P<season>(SS|FW|FL|AW|HO|AL|CO|WN|SM|SP|SU|FA)\d{2,4})'  # e.g. SP2028, FW26, FL9080
         r'(?:-(?P<country>[A-Z]{2,3}))?'     # optional country token e.g. PH, MY, ID
         r'-(?P<seq>\d+)$',
         stem,
@@ -1972,8 +2013,14 @@ def _parse_metadata_from_linelist_filename(
 
     # sbu — read directly from filename part[1]
     sbu_from_filename = parts[1].strip() if len(parts) > 1 else ""
-    if sbu_from_filename and len(sbu_from_filename) <= 4:
-        sbu = sbu_from_filename
+    # Only trust slot [1] when the filename actually has the convention shape
+    # ({comp}-{sbu}-{brand}-{type}-{multi}-{season}[-{country}]-{seq} = 7+ parts).
+    # A non-conventional name can put something else there entirely
+    # (e.g. "S227 APP ACC Preline Linelist - SEA" → "SEA"), which must not be
+    # mistaken for an SBU. Deliberately not a fixed code list — real SBUs
+    # include CH, SB, GO and others that a whitelist would keep rejecting.
+    if len(parts) >= 7 and re.fullmatch(r'[A-Za-z0-9]{2,4}', sbu_from_filename):
+        sbu = sbu_from_filename.upper()
     elif linelist_ftype == "ean_source":
         sbu = ETL_TYPE_SBU.get("ean_source", "FW")
     else:
@@ -2101,7 +2148,7 @@ def lambda_handler(event, context, auditor=None):
     #                  linelist_licensed > ecommerce
     if etl_module is None:
         for candidate in ("linelist_apparel", "linelist_footwear",
-                  "linelist_footwear_gtm",
+                  "linelist_footwear_gtm", "linelist_appacc_preline",
                   "linelist_licensed", "ecommerce_licensed",
                   "ecommerce_inline","ean_source","ordersheet_licensed"):
             if candidate in found:
@@ -2223,7 +2270,7 @@ def lambda_handler(event, context, auditor=None):
 
     if not meta_filename:
         for candidate in ("linelist_apparel", "linelist_footwear",
-                  "linelist_footwear_gtm",
+                  "linelist_footwear_gtm", "linelist_appacc_preline",
                   "linelist_licensed", "ecommerce_licensed",
                   "ecommerce_inline",  "linelist","ean_source","ordersheet_licensed"):
             if candidate in found:

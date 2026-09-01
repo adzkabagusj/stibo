@@ -24,7 +24,7 @@ Stibo Attribute ID                      Type  Source Column / Logic
 ──────────────────────────────────────────────────────────────────────────────
 AT_InboundGenericCode                   Text  brand_code + IMPLUS EU ITEM #  (formula)
 AT_PrincipalStyleCode                   Text  IMPLUS EU ITEM #
-AT_PrincipalStyleDescription            Text  DESCRIPTION
+AT_PrincipalStyleDescription            Text  L1 + L2 + DESCRIPTION + SIZE  (formula)
 AT_PrincipalColorName                   Text  COLOR
 AT_PrincipalColorCode                   Text  COLOR  (no separate code column)
 AT_PrincipalSize                        Text  SIZE
@@ -432,17 +432,20 @@ def group_generics(rows: list[SofsoleRow]) -> dict[str, dict[str, SofsoleGeneric
     """
     Group rows into { style_key → { color → SofsoleGenericGroup } }.
 
-    Grouping key:  (major_category.upper() | style_desc.upper())
+    Grouping key:  IMPLUS EU ITEM # (falls back to IMPLUS US ITEM #, then row_num)
     Color key:     COLOR value (or "NC" if absent)
 
-    The first variant's IMPLUS EU ITEM # anchors the generic's
-    AT_PrincipalStyleCode and KEY_InboundArticle (brand_code + implus_eu).
+    Each IMPLUS EU ITEM # in this source is a distinct article (one number
+    per size break), so it is the grouping key — the same number that
+    anchors AT_PrincipalStyleCode and KEY_InboundArticle (brand_code + implus_eu).
+    Grouping by style description instead would wrongly collapse every size
+    break of the same style into one product.
     """
     groups: dict[str, dict[str, SofsoleGenericGroup]] = defaultdict(dict)
 
     for r in rows:
         style_desc = r.style_desc or f"UNKNOWN_ROW_{r.row_num}"
-        style_key  = f"{r.major_category.upper()}|{style_desc.upper()}"
+        style_key  = r.implus_eu or r.implus_us or f"UNKNOWN_ROW_{r.row_num}"
         color      = r.color or "NC"
 
         if color not in groups[style_key]:
@@ -495,9 +498,12 @@ def _build_generic_product(group: SofsoleGenericGroup, cfg: dict) -> ET.Element:
 
     first_var = group.variants[0] if group.variants else None
 
-    # ── AT_PrincipalStyleDescription formula: L1 + L2 + input DESCRIPTION ────
+    # ── AT_PrincipalStyleDescription formula: L1 + L2 + input DESCRIPTION + SIZE ─
     combined_style_desc = " ".join(
-        part for part in (group.hierarchy_l1, group.hierarchy_l2, group.style_desc) if part
+        part for part in (
+            group.hierarchy_l1, group.hierarchy_l2, group.style_desc,
+            first_var.size if first_var else "",
+        ) if part
     ).strip()
 
     # ── Product element ───────────────────────────────────────────────────────
@@ -530,7 +536,7 @@ def _build_generic_product(group: SofsoleGenericGroup, cfg: dict) -> ET.Element:
     # ── AT_PrincipalStyleCode  (Direct from Principal — IMPLUS EU ITEM #) ────
     _val(vals_el, "AT_PrincipalStyleCode", group.implus_eu)
 
-    # ── AT_PrincipalStyleDescription  (formula: L1 + L2 + DESCRIPTION) ───────
+    # ── AT_PrincipalStyleDescription  (formula: L1 + L2 + DESCRIPTION + SIZE) ─
     _val(vals_el, "AT_PrincipalStyleDescription", combined_style_desc)
 
     # ── AT_PrincipalColorName  (Direct from Principal — COLOR) ───────────────
@@ -554,7 +560,7 @@ def _build_generic_product(group: SofsoleGenericGroup, cfg: dict) -> ET.Element:
     if group.hierarchy_l2:
         _val(vals_el, "AT_PrincipalMerchandiseHierarchyL2", group.hierarchy_l2)
 
-    # ── AT_PrincipalMerchandiseHierarchyL3  (formula: L1 + L2 + DESCRIPTION) ─
+    # ── AT_PrincipalMerchandiseHierarchyL3  (formula: L1 + L2 + DESCRIPTION + SIZE) ─
     if combined_style_desc:
         _val(vals_el, "AT_PrincipalMerchandiseHierarchyL3", combined_style_desc)
 
@@ -699,25 +705,6 @@ def _build_generic_product(group: SofsoleGenericGroup, cfg: dict) -> ET.Element:
 def build_xml(rows: list[SofsoleRow], out_xml_path: Path, cfg: dict) -> None:
     """Write the full STEP-ProductInformation XML for all Sofsole generics."""
     groups = group_generics(rows)
-
-    # ── TEST LIMITER — set TEST_MODE = False for production ───────────────────
-    TEST_MODE = True
-    LIMIT = 5
-
-    if TEST_MODE:
-        limited: dict[str, dict[str, SofsoleGenericGroup]] = {}
-        count = 0
-        for sk, cm in groups.items():
-            if count >= LIMIT:
-                break
-            limited[sk] = {}
-            for color, grp in cm.items():
-                if count >= LIMIT:
-                    break
-                limited[sk][color] = grp
-                count += 1
-        groups = limited
-        log.info("[Sofsole] TEST MODE: limited to %d generic(s)", count)
 
     brand_code   = cfg.get("brand_code",   "IPL")
     brand_name   = cfg.get("brand_name",   "IMPLUS")

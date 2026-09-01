@@ -49,9 +49,9 @@ SAP Color Code derivation:
 
 Care Instruction EN (AT_CareInstructionEN):
   Derived from `program` value per brand mapping logic:
-  • Sock / Crew Sock / Sport Ankle Sock / Sock Liner → sock care wording
-  • Shoe Care                                         → shoe care wording
-  • All others                                        → general acc wording
+  • 3pk Sock Liner / 3pk Crew Sock / 3pk Sport Ankle Sock / Crew Sock → sock care wording
+  • Shoe Care                                                          → shoe care wording
+  • All others                                                        → not sent (attribute omitted)
 """
 
 from __future__ import annotations
@@ -155,23 +155,22 @@ def _care_instruction_en(program_val: str) -> str:
     Rules:
       - 3pk Sock Liner / 3pk Crew Sock / 3pk Sport Ankle Sock / Crew Sock → sock care
       - Shoe Care → shoe care product instructions
-      - Anything else → pass through the raw program value as-is
+      - Anything else → not sent (empty string)
     """
     if not program_val:
         return ""
 
-    raw = str(program_val).strip()
-    p = raw.lower()
+    p = str(program_val).strip().lower()
 
     # Check for sock products
     if p in _SOCK_PROGRAM_VALUES:
         return _CARE_SOCK
 
-    # Check for shoe care
-    if p == "shoe care":
+    # Check for shoe care (matches "Shoe Care" / "ShoeCare" / "Shoecare" / "shoecare")
+    if p in ("shoe care", "shoecare"):
         return _CARE_SHOE_CARE
 
-    return raw
+    return ""
 
 
 # ======================================================================

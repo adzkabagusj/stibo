@@ -466,7 +466,7 @@ def build_xml(generics: dict[str, GenericGroup], out_path: Path) -> None:
     # ══════════════════════════════════════════════════════════════════════
     # TEST LIMITER — Set TEST_MODE = False for production
     # ══════════════════════════════════════════════════════════════════════
-    TEST_MODE = True
+    TEST_MODE = False
     PRODUCT_LIMIT = 2
     VARIANT_LIMIT = 3
 

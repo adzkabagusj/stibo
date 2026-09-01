@@ -1,44 +1,54 @@
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║   STIBO INBOUND XML GENERATOR — NEW BALANCE  (GTM Footwear) v1.0 ║
-║   Line List (Footwear GTM) → Stibo STEP XML                      ║
+║  STIBO INBOUND XML GENERATOR — NEW BALANCE (App/Acc Preline) v1.0 ║
+║  Line List (App Acc Preline - Updated) → Stibo STEP XML          ║
 ╚══════════════════════════════════════════════════════════════════╝
 
-Source file  : S2'27 APAC Footwear GTM 2 Line Sheet
-               ("Copy of S227 GTM 2 APAC Footwear Line List July 2026.xlsx")
-Primary tab  : APAC   (title row index 0, header row index 3, data from index 4)
+Source file  : S2'27 APP ACC Preline Linelist - SEA
+               ("S227 APP ACC Preline Linelist - SEA.xlsm")
+Primary tab  : APPACC   (header row index 3, data from index 4)
 
 ────────────────────────────────────────────────────────────────────
 WHY THIS MODULE EXISTS
 ────────────────────────────────────────────────────────────────────
-The GTM line sheet is a *different* export from the Footwear Price List that
-`inline_main_footwear.py` consumes. Only 4 of the 15 source columns that the
-price-list ETL reads are present in the GTM sheet, so every attribute whose
-source column is absent is DELIBERATELY NOT EMITTED here (rather than emitted
-empty or back-filled from a look-alike column).
+The Preline line list is a *different* export from the Apparel & Accessories
+Price List that `inline_main_accessories.py` consumes. Only 12 of the 29 source
+columns that the price-list ETL reads survive, so every attribute whose source
+column is absent is DELIBERATELY NOT EMITTED (rather than emitted empty or
+back-filled from a look-alike column).
 
-Column availability audit — Price List columns vs. GTM sheet:
+Column availability audit — Price List columns vs. Preline sheet:
 
   PRESENT (mapping preserved 1:1)
   ───────────────────────────────
-    Item Number          → AT_PrincipalStyleCode
+    Product Number       → AT_PrincipalStyleCode
                          → AT_PrincipalStyleDescription
-                           (price-list ETL writes `display_name or item_number`;
-                            with no Product Name column the Item Number
-                            fallback applies — which is also the mapping the
-                            MDD / brand attributes sheet declares)
-    Product Number       → (read, but emits nothing — AT_SAPStyleCode was
-                            withdrawn at MAA's request, see REMOVED_BY_REQUEST)
-    Line Plan Business   → AT_SportsCategoryEN (LOV — emits the MDD LOV *ID*)
-                         → AT_PrincipalMerchandiseHierarchyL2
-    CATEGORY             → (read, but the price-list ETL emits no attribute
-                            from it — so nothing is emitted here either)
+    Item Number          → AT_InboundGenericCode  (see DEVIATION below)
+                         → <Name> fallback
+    Size Profile         → AT_Gender / AT_BYGender
+                         → AT_PrincipalGenderCode / AT_PrincipalGenderDescription
+                         → AT_SAPAge / AT_BYAge
+                         → AT_PrincipalAgeCode / AT_PrincipalAgeDescription
+    Product Line         → AT_PrincipalMerchandiseHierarchyL1
+    Line Plan Business   → AT_PrincipalMerchandiseHierarchyL2
+                         → AT_SportsCategoryEN (LOV — emits the MDD LOV *ID*)
+    Silhouette           → AT_PrincipalMerchandiseHierarchyL3
+                         → AT_Silhouette (LOV — ID resolved from MDD at runtime)
+    Technologies         → AT_TechnologyUsed
+    Product Display Name → <Name>
+    Category / GBU / LPA Category / Item - CarryOver/New
+                         → (read, but the price-list ETL emits no attribute
+                            from them — so nothing is emitted here either)
 
   ABSENT (attribute dropped — see DROPPED_ATTRIBUTES below)
   ────────────────────────────────────────────────────────
-    NRF Color, Size Profile, Product Line, Segment, Sizes - Region,
-    Country of Origin, NBIL Price, Retail Price, Factory Name,
-    Product Name, Intro Period
+    Color Code, Color Name, Color Family, COO, Global Retail Price,
+    NBIL Price, Collection, Fit Version, Channel Type, Merchandise Category,
+    SMU Type, Sizes, Supplier, Primary Fabric Content,
+    Global Intro Date, Region Intro Date, Phraseout Date
+
+    Channel Type is absent but costs nothing: AT_BYArticleType is emitted as the
+    constant ID="Inline", matching every other NB Inline ETL.
 
 Attributes with no source-column dependency (brand/season/company context and
 fixed constants) are emitted unchanged, exactly as the price-list ETL does.
@@ -46,12 +56,12 @@ fixed constants) are emitted unchanged, exactly as the price-list ETL does.
 ────────────────────────────────────────────────────────────────────
 DEVIATION (one, deliberate)
 ────────────────────────────────────────────────────────────────────
-AT_InboundGenericCode / KEY_InboundArticle is built from Item Number instead
-of Product Number. In the GTM sheet Product Number is style-level, not
-colorway-level (2781 rows collapse to 468 Product Numbers), and the colorway
-component of the original key (NRF Color) is gone — so keying on Product
-Number would merge ~2300 distinct articles into 468. Item Number is present
-and unique per row, so it carries the key. See _build_generic_code().
+AT_InboundGenericCode / KEY_InboundArticle is built from Item Number instead of
+Product Number + Color Code. In the Preline sheet Product Number is style-level,
+not colourway-level (1627 rows collapse to 606 Product Numbers), and the colour
+component of the original key (Color Code) is gone — so keying on Product Number
+would merge ~1000 distinct articles into 606. Item Number is present and unique
+per row, so it carries the key. See _build_generic_code().
 """
 
 import re
@@ -73,7 +83,7 @@ import pandas as pd
 BASE_DIR = Path(os.environ.get("LAMBDA_TMP_DIR", str(Path(__file__).parent)))
 
 INPUT_DIR    = BASE_DIR / "input"
-LINELIST_DIR = INPUT_DIR / "linelist_footwear_gtm"
+LINELIST_DIR = INPUT_DIR / "linelist_appacc_preline"
 MDD_DIR      = INPUT_DIR / "mdd"
 ATTR_DIR     = INPUT_DIR / "attributes"
 
@@ -84,7 +94,7 @@ LOG_DIR     = OUTPUT_DIR / "logs"
 for d in [LINELIST_DIR, MDD_DIR, ATTR_DIR, XML_OUT_DIR, LOG_DIR]:
     d.mkdir(parents=True, exist_ok=True)
 
-log_path = LOG_DIR / f"run_nb_footwear_gtm_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+log_path = LOG_DIR / f"run_nb_appacc_preline_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-8s  %(message)s",
@@ -101,89 +111,121 @@ log = logging.getLogger(__name__)
 # ══════════════════════════════════════════════════════════════════
 # Every column this ETL reads, and the attributes each one feeds.
 SOURCE_COLUMNS: dict[str, list[str]] = {
-    "Item Number":        ["AT_PrincipalStyleCode", "AT_PrincipalStyleDescription",
-                           "AT_InboundGenericCode"],
-    "Product Number":     [],   # AT_SAPStyleCode withdrawn — emits nothing now
-    "Line Plan Business": ["AT_SportsCategoryEN",
-                           "AT_PrincipalMerchandiseHierarchyL2"],
-    "Adult Gender/ Kids Closure Type": ["AT_PrincipalGenderDescription"],
-    "CATEGORY":           [],   # read for logging/QA only — emits no attribute
+    "Product Number":       ["AT_PrincipalStyleCode", "AT_PrincipalStyleDescription"],
+    "Item Number":          ["AT_InboundGenericCode"],
+    "Size Profile":         ["AT_PrincipalGenderDescription",
+                             "AT_PrincipalAgeDescription"],
+    "Product Line":         ["AT_PrincipalMerchandiseHierarchyL1"],
+    "Line Plan Business":   ["AT_PrincipalMerchandiseHierarchyL2", "AT_SportsCategoryEN"],
+    "Silhouette":           ["AT_PrincipalMerchandiseHierarchyL3"],
+    "Technologies":         ["AT_TechnologyUsed"],
+    "Product Display Name": [],   # feeds <Name> only, not an AT_ attribute
+    "Category":             [],   # read for logging/QA only — emits no attribute
+    "GBU":                  [],   # read for logging/QA only — emits no attribute
+    "LPA Category":         [],   # read for logging/QA only — emits no attribute
+    "Item - CarryOver/New": [],   # read for logging/QA only — emits no attribute
 }
 
 # Attributes withdrawn on MAA instruction, NOT because a source column is
-# absent. Their source data is present (or they were constants) — MAA asked for
-# them to be left out of the payload. Kept separate from DROPPED_ATTRIBUTES so
-# the two reasons never get confused.
+# absent. Same standing instruction already applied to the GTM footwear ETL.
 REMOVED_BY_REQUEST: dict[str, str] = {
-    "AT_Gender":   "MAA asked not to send it",
-    "AT_BYGender": "MAA asked not to send it",
-    "AT_SAPAge":   "MAA asked not to send it",
-    "AT_BYAge":    "MAA asked not to send it",
+    "AT_NatureOfArticle":     "constant 'RT1'; MAA asked not to send it",
+    "AT_Gender":              "Stibo asked not to send it",
+    "AT_BYGender":            "Stibo asked not to send it",
+    "AT_SAPAge":              "Stibo asked not to send it",
+    "AT_BYAge":               "Stibo asked not to send it",
+    "AT_PrincipalGenderCode": "Stibo asked not to send it",
+    "AT_PrincipalAgeCode":    "Stibo asked not to send it",
+    "AT_Silhouette":          "Stibo asked not to send it",
     "AT_SAPStyleCode":             "Product Number was available; MAA asked not to send it",
     "AT_BYIndicator":              "constant 'Y'; MAA asked not to send it",
     "AT_SAPIndicator":             "constant 'N'; MAA asked not to send it",
     "AT_EcomIndicator":            "constant 'N'; MAA asked not to send it",
     "AT_UOM":                      "constant 'EA'; MAA asked not to send it",
     "AT_MainVendorIdentification": "constant '1'; MAA asked not to send it",
-    "AT_NatureOfArticle":          "constant 'Retail' (RT1); MAA asked not to send it",
 }
 
-# Attributes the Price List ETL (inline_main_footwear.py) emits that are NOT
-# emitted here, keyed by the source column that is missing from the GTM sheet.
+# Attributes the Price List ETL (inline_main_accessories.py) emits that are NOT
+# emitted here, keyed by the source column missing from the Preline sheet.
 DROPPED_ATTRIBUTES: dict[str, list[str]] = {
-    # AT_PrincipalStyleDescription is NOT listed here: Product Name is only its
-    # first choice — it falls back to Item Number, which the GTM sheet has.
-    "Product Name":      ["AT_PrincipalMerchandiseHierarchyL3"],
-    "NRF Color":         ["AT_PrincipalColorCode", "AT_PrincipalColorName",
-                          "AT_Color"],
-    # AT_PrincipalGenderDescription moved OFF Size Profile — MAA sources it from
-    # "Adult Gender/ Kids Closure Type" and wants it as a plain text value.
-    "Size Profile":      ["AT_PrincipalGenderCode",
-                          "AT_PrincipalAgeCode", "AT_PrincipalAgeDescription"],
-    "Country of Origin": ["AT_CountryOrigin"],
-    "Retail Price":      ["AT_OriginalPrice", "AT_CurrentPrice"],
-    "NBIL Price":        ["AT_FOB"],
-    "Segment":           ["AT_MerchandiseCategory"],
-    "Product Line":      ["AT_PrincipalMerchandiseHierarchyL1"],
-    "Sizes - Region":    [],   # fed size variants, which are disabled anyway
-    "Intro Period":      [],   # mapped but never emitted by the price-list ETL
-    "Factory Name":      [],   # mapped but never emitted by the price-list ETL
+    "Color Code":             ["AT_PrincipalColorCode", "AT_Color"],
+    "Color Name":             ["AT_PrincipalColorName"],
+    "Color Family":           [],   # fed the AT_Color LOV lookup only
+    "COO":                    ["AT_CountryOrigin"],
+    "Global Retail Price":    ["AT_OriginalPrice", "AT_CurrentPrice"],
+    "NBIL Price":             ["AT_FOB"],
+    "Collection":             ["AT_Collection1"],
+    "Fit Version":            ["AT_CountrySize"],
+    # AT_BYArticleType is NOT dropped: every NB Inline ETL emits it as the
+    # constant ID="Inline" (inline_ecommerce_main, inline_main_footwear and
+    # inline_gtm_footwear_main all hardcode it), and the accessories price-list
+    # ETL's own Channel Type lookup defaults to "Inline" too. It is a file-type
+    # constant here, not a column-derived value.
+    "Channel Type":           [],
+    "Merchandise Category":   [],   # price-list ETL has it commented out
+    "SMU Type":               [],   # mapped but never emitted
+    "Sizes":                  [],   # fed size variants, disabled here
+    "Supplier":               [],   # AT_VendorName commented out in price-list ETL
+    "Primary Fabric Content": [],   # AT_Content / AT_Material commented out
+    "Global Intro Date":      [],   # mapped but never emitted
+    "Region Intro Date":      [],   # mapped but never emitted
+    "Phraseout Date":         [],   # mapped but never emitted
 }
 
 
 # ══════════════════════════════════════════════════════════════════
-# LOV TABLES  (identical to inline_main_footwear.py — only the tables
+# LOV TABLES  (copied from inline_main_accessories.py — only the tables
 #              still reachable from the surviving columns are kept)
 # ══════════════════════════════════════════════════════════════════
 
 LOV_BRAND = {
-    "NEW": "NEW BALANCE", "ADI": "ADIDAS", "NIK": "NIKE",
-    "SMI": "SMIGGLE",     "ALD": "ALDO",   "CRO": "CROCS",
-    "LOT": "LOTTO",       "BIR": "BIRKENSTOCK",
+    "ADI": "ADIDAS", "NIK": "NIKE", "NEW": "NEW BALANCE",
+    "SMI": "SMIGGLE", "ALD": "ALDO", "CRO": "CROCS",
+    "LOT": "LOTTO",   "BIR": "BIRKENSTOCK",
 }
 
+LOV_GENDER = {"M": "Male", "F": "Female", "U": "Unisex"}
+LOV_AGE = {
+    "AD": "Adults", "CH": "Children", "IN": "Infant",
+    "AA": "All Ages", "JR": "Junior",
+}
+LOV_BY_AGE = {
+    "ADULT": "Adult", "ADULTS": "Adult", "AD": "Adult",
+    "JUNIOR": "Junior", "YOUTH": "Youth", "KIDS": "Kids",
+    "CHILDREN": "Children", "CHILD": "Child", "INFANT": "Infant",
+    "ALL AGES": "All Ages", "ALL": "All Ages", "CH": "Children",
+    "AA": "All Ages",
+}
 LOV_SAP_ARTICLE_CATEGORY = {
-    "1": "Single Article", "2": "Prepack", "3": "Display", "10": "Structured Article",
+    "1": "Generic", "0": "Single", "10": "Sell set (Hampers)",
 }
 LOV_BY_ARTICLE_TYPE = {
-    "Inline": "Inline", "Licensed": "Licensed", "Basic": "Basic",
+    "Inline": "Inline", "License": "License", "SSE": "SSE",
+    "Licensed": "License", "INLINE": "Inline", "TEAM": "Inline",
 }
 LOV_SEASON = {
-    "SS": "Spring Summer", "FW": "Fall Winter",
-    "AW": "Autumn Winter", "HO": "Holiday",
+    # MDD "Season LOV" — code → season name
+    "SP": "Spring",        "SM": "Summer",       "FL": "Fall",
+    "WN": "Winter",        "CO": "Core",         "SS": "Spring-Summer",
+    "FW": "Fall-Winter",   "AL": "All Season",
 }
 LOV_COMPANY_CODE = {
-    "0888": "MAP Active Indonesia", "0000": "Default",
+    "0888": "PT. Map Aktif Adiperkasa",
+    "0886": "PT. MAP FTL Adiperkasa",
+    "0882": "Magna Management Asia",
 }
 LOV_SBU = {
     "SP": "Sports", "FQ": "Footlocker", "FL": "Fashion Footwear",
-    "FW": "Footwear",
+    "AP": "Apparel", "AC": "Accessories",
 }
 
-# ── Footwear: Line Plan Business → Sports Category ───────────────────────────
-# Kept identical to the App/Acc ETL's table (new_balance/inline_main_accessories.py)
-# per MAA instruction — same source column ("Line Plan Business"), same mapping.
+# Line Plan Business → Sports Category EN (AT_SportsCategoryEN)
+# NOTE: "GLOBAL FOOTBALL" is an addition — it appears in the Preline sheet but
+# not in the price-list ETL's table, where it would silently fall to "Other".
 LOV_LINE_PLAN_TO_SPORTS_CAT: dict[str, str] = {
+    # MAA MD mapping (NB App & Acc): Line Plan Business → Sports Category.
+    # DELIBERATELY exhaustive — a value not listed has no approved MD mapping,
+    # so AT_SportsCategoryEN is omitted for that article (no "Other" default).
     "RUNNING":               "Running",
     "TRAINING":              "Running",
     "OTHER FOP":             "Other",
@@ -192,20 +234,14 @@ LOV_LINE_PLAN_TO_SPORTS_CAT: dict[str, str] = {
     "KIDS LIFESTYLE":        "Lifestyle / Casual",
     "TENNIS":                "Tennis / Padel",
     "KIDS PERFORMANCE":      "Running",
-    "BASKETBALL AND SOFTBALL": "Other",
+    "BASEBALL AND SOFTBALL": "Other",
     "SKATE":                 "Skateboarding",
-    "SOCCER":                "Soccer",
-    "GOLF":                  "Golf",
-    "WALKING":               "Walking",
-    "BADMINTON":             "Badminton",
 }
 
 # ── Sports Category → MDD LOV ID  (MDD sheet "Sports Category LOV") ──────────
-# AT_SportsCategoryEN is an LOV attribute, so the XML carries the ID, not the
-# display name. Value IDs are ZERO-PADDED for 1-9 ("01".."09"), matching the
-# App/Acc ETL's table (new_balance/inline_appacc_preline_main.py) and the
-# live Stibo "Sports Category" LOV.
+# AT_SportsCategoryEN is an LOV attribute, so the XML carries the ID.
 LOV_SPORTS_CATEGORY_ID: dict[str, str] = {
+    # Stibo "Sports Category" LOV — Value IDs are ZERO-PADDED for 1-9 ("01".."09")
     "Badminton":                             "01",
     "Basketball":                            "02",
     "Cycling":                               "03",
@@ -224,15 +260,29 @@ LOV_SPORTS_CATEGORY_ID: dict[str, str] = {
     "Other":                                 "16",
 }
 
-DIVISION_PARENT_MAP: dict[str, str] = {
-    "ACCESSORIES": "E", "FOOTWEAR": "F",
-    "APPAREL": "A", "EQUIPMENT": "Q", "TOYS": "T",
-    "SHOES": "F",
+# Size Profile → SAP Gender code
+LOV_SIZE_PROFILE_TO_GENDER: dict[str, str] = {
+    "WOMENS":  "F", "MENS": "M", "UNISEX": "U", "YOUTH": "U",
+    "KIDS":    "U", "GIRLS": "F", "BOYS": "M", "INFANTS": "U",
 }
 
-# The GTM sheet is footwear-only (no Product Line column), so the division is
-# fixed by the file type rather than read from a column.
-DIVISION = "Footwear"
+# Size Profile → SAP Age code
+LOV_SIZE_PROFILE_TO_AGE: dict[str, str] = {
+    "WOMENS":  "AD", "MENS": "AD", "UNISEX": "AD", "YOUTH": "CH",
+    "KIDS":    "CH", "GIRLS": "CH", "BOYS": "CH", "INFANTS": "CH",
+}
+
+# Age code → LOV_BYAge ID (as registered in STIBO)
+LOV_AGE_CODE_TO_BY_LOV_ID: dict[str, str] = {
+    "AD": "ADULT", "CH": "KIDS", "AA": "ALL AGES",
+    "IN": "INFANT", "JR": "KIDS",
+}
+
+# Product Line → Division letter (for PPH parent and division code)
+DIVISION_PARENT_MAP: dict[str, str] = {
+    "ACCESSORIES": "E", "FOOTWEAR": "F", "APPAREL": "A",
+    "EQUIPMENT":   "Q", "TOYS":     "T",
+}
 
 STIBO_NS     = "http://www.stibosystems.com/step"
 STIBO_XSI    = "http://www.w3.org/2001/XMLSchema-instance"
@@ -374,15 +424,15 @@ class AttributesListLoader:
         return str(v).strip() if v else None
 
 
-class GTMFootwearLineListLoader:
+class AppAccPrelineLoader:
     """
-    Loads the New Balance APAC Footwear GTM Line Sheet.
+    Loads the New Balance APP/ACC Preline Line List.
 
-    The sheet carries a merged title row ("S2'27 APAC Footwear GTM 2 Line
-    Sheet") followed by blank rows, so the header row is located dynamically by
-    scanning for "Item Number" — same strategy as FootwearPriceListLoader.
+    The sheet carries two short marker rows ("ACC", "APP") above the header, so
+    the header row is located dynamically by scanning for "Item Number" — same
+    strategy as the price-list loader.
     """
-    SHEET_NAMES = ["APAC", "Line Sheet", "Line List", "Sheet1"]
+    SHEET_NAMES = ["APPACC", "APP ACC", "Preline", "Linelist", "Sheet1"]
 
     def __init__(self, path: Path):
         self.path  = path
@@ -391,13 +441,13 @@ class GTMFootwearLineListLoader:
         self._load()
 
     def _load(self):
-        log.info("[GTM-FW] Loading: %s", self.path.name)
+        log.info("[AppAccPreline] Loading: %s", self.path.name)
         wb = openpyxl.load_workbook(self.path, read_only=True, data_only=True)
 
         target = next((s for s in self.SHEET_NAMES if s in wb.sheetnames), None)
         if target is None:
             target = max(wb.sheetnames, key=lambda s: wb[s].max_row or 0)
-        log.info("[GTM-FW] Using sheet: '%s'", target)
+        log.info("[AppAccPreline] Using sheet: '%s'", target)
 
         ws   = wb[target]
         rows = list(ws.iter_rows(values_only=True))
@@ -414,20 +464,16 @@ class GTMFootwearLineListLoader:
                 None,
             )
         if hdr_idx is None:
-            log.error("[GTM-FW] Cannot find header row in '%s'", target)
+            log.error("[AppAccPreline] Cannot find header row in '%s'", target)
             wb.close()
             return
 
-        log.info("[GTM-FW] Header at row index %d (row %d)", hdr_idx, hdr_idx + 1)
+        log.info("[AppAccPreline] Header at row index %d (row %d)", hdr_idx, hdr_idx + 1)
         header = [
             str(h).replace("\n", " ").strip() if h else f"col_{i}"
             for i, h in enumerate(rows[hdr_idx])
         ]
         df = pd.DataFrame(rows[hdr_idx + 1:], columns=header)
-        # True 1-based Excel row number for each data row, captured BEFORE any
-        # filtering below — lets callers target a specific spreadsheet row
-        # (e.g. row 833) reliably even if blank rows get dropped afterwards.
-        df["_ExcelRow"] = range(hdr_idx + 2, hdr_idx + 2 + len(df))
 
         item_col = next(
             (c for c in ["Item Number", "Item No.", "Item No"] if c in df.columns), None
@@ -445,9 +491,9 @@ class GTMFootwearLineListLoader:
 
         missing = [c for c in SOURCE_COLUMNS if c not in self.df.columns]
         if missing:
-            log.warning("[GTM-FW] Expected source column(s) absent: %s", missing)
+            log.warning("[AppAccPreline] Expected source column(s) absent: %s", missing)
 
-        log.info("[GTM-FW] %d SKU rows loaded from '%s'", len(self.df), self.sheet)
+        log.info("[AppAccPreline] %d SKU rows loaded from '%s'", len(self.df), self.sheet)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -461,21 +507,30 @@ def _s(v) -> str:
     return "" if s in ("None", "nan", "0", "N/A") else s
 
 
+def _size_profile_to_gender(size_profile: str) -> str:
+    return LOV_SIZE_PROFILE_TO_GENDER.get(size_profile.upper().strip(), "U")
+
+
+def _size_profile_to_age(size_profile: str) -> str:
+    return LOV_SIZE_PROFILE_TO_AGE.get(size_profile.upper().strip(), "AD")
+
+
 def _line_plan_to_sports_cat(line_plan: str) -> str:
-    return LOV_LINE_PLAN_TO_SPORTS_CAT.get(line_plan.upper().strip(), "Other")
+    """Line Plan Business → Sports Category. No MD mapping → "" (omitted)."""
+    return LOV_LINE_PLAN_TO_SPORTS_CAT.get(line_plan.upper().strip(), "")
 
 
 def _sports_cat_to_lov_id(sports_cat: str) -> str:
-    """Sports Category display name → MDD LOV ID. Unmapped → "16" (Other)."""
-    return LOV_SPORTS_CATEGORY_ID.get(sports_cat.strip(), "16")
+    """Sports Category name → MDD LOV ID. No match → "" (omitted)."""
+    return LOV_SPORTS_CATEGORY_ID.get(sports_cat.strip(), "")
 
 
 def _build_generic_code(brand_code: str, item_number: str) -> str:
     """
-    Price-list ETL builds this as brand(3) + Product Number(9) + NRF colour
-    suffix. The GTM sheet has no colour column and its Product Number is
-    style-level (2781 rows → 468 Product Numbers), so the colourway-unique
-    Item Number carries the key instead. Keeps the key 1:1 with a source row.
+    Price-list ETL builds this as brand(3) + Product Number + Color Code. The
+    Preline sheet has no Color Code column and its Product Number is style-level
+    (1627 rows → 606 Product Numbers), so the colourway-unique Item Number
+    carries the key instead. Keeps the key 1:1 with a source row.
     """
     brand = re.sub(r"[^A-Z0-9]", "", brand_code.upper())[:3]
     base  = re.sub(r"[^A-Z0-9]", "", item_number.upper())
@@ -485,31 +540,40 @@ def _build_generic_code(brand_code: str, item_number: str) -> str:
 def map_sku(row: pd.Series, brand_code: str = "NEW") -> dict:
     item_number    = _s(row.get("Item Number"))
     product_number = _s(row.get("Product Number"))
-    line_plan_biz  = _s(row.get("Line Plan Business", ""))
-    gender_raw     = _s(row.get("Adult Gender/ Kids Closure Type", ""))
-    category       = _s(row.get("CATEGORY", ""))
-    excel_row      = row.get("_ExcelRow")
+    size_profile   = _s(row.get("Size Profile"))
+    product_line   = _s(row.get("Product Line"))
+    line_plan_biz  = _s(row.get("Line Plan Business"))
+    silhouette     = _s(row.get("Silhouette"))
+    technologies   = _s(row.get("Technologies"))
+    display_name   = _s(row.get("Product Display Name"))
+    category       = _s(row.get("Category"))
+    gbu            = _s(row.get("GBU"))
+    lpa_category   = _s(row.get("LPA Category"))
+    carry_over_new = _s(row.get("Item - CarryOver/New"))
 
     return {
         "item_number":    item_number,
         "product_number": product_number,
-        # No Product Name column in the GTM sheet, so the price-list ETL's
-        # `display_name or item_number` fallback always resolves to Item Number.
-        "display_name":   "",
         "brand_code":     brand_code,
+        "gender_code":    _size_profile_to_gender(size_profile),
+        "gender_raw":     size_profile,
+        "age_code":       _size_profile_to_age(size_profile),
+        "age_raw":        size_profile,
+        "division":       product_line,
         "line_plan_biz":  line_plan_biz,
-        "gender_raw":     gender_raw,
-        "category":       category,
         "sports_cat":     _line_plan_to_sports_cat(line_plan_biz),
+        "silhouette":     silhouette,
+        "technology":     technologies,
+        "display_name":   display_name,
+        "category":       category,
+        "gbu":            gbu,
+        "lpa_category":   lpa_category,
+        "carry_over_new": carry_over_new,
         "generic_code":   _build_generic_code(brand_code, item_number),
-        "division":       DIVISION,
-        "channel_type":   "Inline",
-        # True 1-based Excel row number this SKU came from (see
-        # GTMFootwearLineListLoader._load "_ExcelRow") — used by the run()
-        # test-limit filter to target exact spreadsheet rows.
-        "excel_row":      int(excel_row) if excel_row is not None else None,
-        "article_type":   "Inline",
         "art_category":   "1",
+        # File-type constant: this is an NB *Inline* line list. The price-list
+        # ETL reads Channel Type (absent here) and defaults to "Inline" anyway.
+        "article_type":   "Inline",
     }
 
 
@@ -527,7 +591,9 @@ def validate(mapped: dict, mdd: MDDLoader) -> list[str]:
     sku   = mapped["item_number"] or "<no item number>"
 
     field_to_at = {
-        "item_number":    "AT_PrincipalStyleCode",
+        "product_number": "AT_PrincipalStyleCode",
+        "gender_code":    "AT_Gender",
+        "age_code":       "AT_SAPAge",
         "brand_code":     "AT_Brand",
         "sports_cat":     "AT_SportsCategoryEN",
     }
@@ -538,6 +604,8 @@ def validate(mapped: dict, mdd: MDDLoader) -> list[str]:
             if not val or str(val).strip() in ("", "None", "nan"):
                 warns.append(f"[{sku}] MISSING mandatory: {at_id}")
 
+    if not mapped.get("gender_raw"):
+        warns.append(f"[{sku}] MISSING source value: Size Profile (gender/age defaulted)")
     if not mapped.get("line_plan_biz"):
         warns.append(f"[{sku}] MISSING source value: Line Plan Business")
 
@@ -548,18 +616,16 @@ def _log_dropped_attributes(mdd: MDDLoader) -> list[str]:
     """Emit a one-time, run-level report of every attribute not carried over."""
     notes: list[str] = []
     notes.append(
-        "Attributes NOT emitted — source column absent from the GTM line sheet:"
+        "Attributes NOT emitted — source column absent from the Preline sheet:"
     )
     for src_col, attrs in DROPPED_ATTRIBUTES.items():
-        if not attrs:
-            continue
         for at_id in attrs:
             card = (mdd.attributes.get(at_id, {}).get("cardinality") or "n/a").strip()
             notes.append(f"  {at_id:38} (source: {src_col})  cardinality={card}")
             if "mandatory" in card.lower():
                 log.warning(
                     "MANDATORY attribute %s dropped — source column '%s' "
-                    "is not in the GTM line sheet.", at_id, src_col,
+                    "is not in the Preline sheet.", at_id, src_col,
                 )
     notes.append("")
     notes.append("Attributes withdrawn at MAA's request (source data not the issue):")
@@ -610,11 +676,12 @@ def _lov(code, lookup, default=""):
 
 
 def _get_division_code(product_line: str) -> str:
+    """Map Product Line to single-letter division code for PPH parent ID."""
     pl_upper = (product_line or "").strip().upper()
     for key, code in DIVISION_PARENT_MAP.items():
         if key in pl_upper:
             return code
-    return "F"
+    return "X"
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -624,7 +691,7 @@ def _get_division_code(product_line: str) -> str:
 def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None):
     """
     Writes only:
-      • attributes whose source column exists in the GTM line sheet, and
+      • attributes whose source column exists in the Preline sheet, and
       • attributes with no source-column dependency (context + constants).
 
     Every other attribute the price-list ETL writes is intentionally absent —
@@ -642,41 +709,33 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None):
     _val(vals_el, "AT_Brand",      b_label, id_val=b_code)
     _val(vals_el, "AT_BrandGroup", b_label, id_val=b_label)
 
-    # ── Item Number ───────────────────────────────────────────────
-    _val(vals_el, "AT_PrincipalStyleCode", art["item_number"])
-    # Same expression as the price-list ETL. display_name is always "" here
-    # (no Product Name column), so this resolves to Item Number.
-    _val(vals_el, "AT_PrincipalStyleDescription",
-         art.get("display_name") or art["item_number"])
+    # ── Product Number ────────────────────────────────────────────
+    _val(vals_el, "AT_PrincipalStyleCode",        art["product_number"])
+    _val(vals_el, "AT_PrincipalStyleDescription", art["product_number"])
 
-    # ── Adult Gender/ Kids Closure Type → Principal Gender Description
-    # Sent as a plain text VALUE (not a LOV ID). Truncated to the MDD
-    # max_chars, same as the footwear price-list ETL does.
-    _gender_max = 20
-    if mdd is not None:
-        _meta = mdd.attributes.get("AT_PrincipalGenderDescription", {})
-        _gender_max = int(_meta.get("max_chars") or 20)
-    _val(vals_el, "AT_PrincipalGenderDescription", art.get("gender_raw", "")[:_gender_max])
+    # ── Size Profile → Gender ─────────────────────────────────────
+    # AT_Gender / AT_BYGender withdrawn at MAA's request.
+    _val(vals_el, "AT_PrincipalGenderDescription", art["gender_raw"])
+
+    # ── Size Profile → Age ────────────────────────────────────────
+    # AT_SAPAge / AT_BYAge withdrawn at MAA's request.
+    _val(vals_el, "AT_PrincipalAgeDescription", art["age_raw"])
 
     # ── Season (from filename metadata) ───────────────────────────
-    sea_raw = art.get("season", "") or ""
-    sea_m = re.match(r'^([A-Z]{2})(\d{2,4})$', sea_raw.strip().upper())
-    if sea_m:
-        sea_prefix = sea_m.group(1)
-        sea_digits = sea_m.group(2)
-        sea_year_4 = sea_digits if len(sea_digits) == 4 else f"20{sea_digits}"
-    else:
-        sea_prefix = sea_raw[:2].upper() if len(sea_raw) >= 2 else sea_raw
-        sea_year_4 = ""
+    sea_raw   = art.get("season", "") or ""
+    sea_code  = sea_raw[:2].upper() if len(sea_raw) >= 2 else sea_raw
+    sea_label = LOV_SEASON.get(sea_raw, LOV_SEASON.get(sea_code, sea_raw))
+    _val(vals_el, "AT_Season", sea_label, id_val=sea_code)
 
-    sea_label = LOV_SEASON.get(sea_raw, LOV_SEASON.get(sea_prefix, sea_raw))
-    _val(vals_el, "AT_Season", sea_label, id_val=sea_prefix)
-    _val(vals_el, "AT_SeasonYear", sea_year_4)
+    year_raw = sea_raw[2:] if len(sea_raw) > 2 else ""
+    year_val = f"20{year_raw}" if len(year_raw) == 2 else year_raw
+    _val(vals_el, "AT_SeasonYear", year_val)
 
-    # ── Article category & type (constants) ───────────────────────
+    # ── Article category (constant) ───────────────────────────────
     cat_code  = art["art_category"]
     cat_label = LOV_SAP_ARTICLE_CATEGORY.get(cat_code, cat_code)
     _val(vals_el, "AT_SAPArticleCategory", cat_label, id_val=cat_code)
+
     at_norm  = art["article_type"].capitalize()
     at_label = LOV_BY_ARTICLE_TYPE.get(at_norm, at_norm)
     _val(vals_el, "AT_BYArticleType", at_label, id_val=at_norm)
@@ -684,12 +743,20 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None):
     # ── Material Type — ZINA (constant) ───────────────────────────
     _val(vals_el, "AT_MaterialType", id_val="ZINA")
 
-    # ── Line Plan Business ────────────────────────────────────────
-    _val(vals_el, "AT_SportsCategoryEN", art["sports_cat"],
-         id_val=_sports_cat_to_lov_id(art["sports_cat"]))
+    # ── Merchandise hierarchy ─────────────────────────────────────
+    _val(vals_el, "AT_PrincipalMerchandiseHierarchyL1", art.get("division", ""))
     _val(vals_el, "AT_PrincipalMerchandiseHierarchyL2", art.get("line_plan_biz", ""))
+    _val(vals_el, "AT_PrincipalMerchandiseHierarchyL3", art.get("silhouette", ""))
 
-    # ── Derived key ────────────────────────────────────────────────
+    # ── Line Plan Business → Sports Category (LOV ID) ─────────────
+    sports_id = _sports_cat_to_lov_id(art.get("sports_cat", ""))
+    if sports_id:
+        _val(vals_el, "AT_SportsCategoryEN", art["sports_cat"], id_val=sports_id)
+
+    # ── Technologies ──────────────────────────────────────────────
+    _val(vals_el, "AT_TechnologyUsed", art["technology"])
+
+    # ── Derived key + constant ────────────────────────────────────
     _val(vals_el, "AT_InboundGenericCode", art["generic_code"])
 
     country_val = art.get("country_code", "")
@@ -710,7 +777,10 @@ def build_classifications(brand, brand_code, season_code):
     season_id        = f"CLH_{brand_code}_{full_season_code}"
     batches_parent   = f"CLH_{brand.replace(' ', '')}Batches"
     season_label_map = {
-        "SS": "Spring Summer", "FW": "Fall Winter",
+        # MDD "Season LOV" — code → season name
+        "SP": "Spring",      "SM": "Summer",      "FL": "Fall",
+        "WN": "Winter",      "CO": "Core",        "SS": "Spring Summer",
+        "FW": "Fall Winter", "AL": "All Season",
         "AW": "Autumn Winter", "HO": "Holiday",
     }
     sea_name       = season_label_map.get(sea_prefix, sea_prefix)
@@ -745,7 +815,7 @@ def build_product_xml(art, brand, brand_code, comp_code, sbu, season_id, mdd=Non
     if not item_number:
         return ""
 
-    div_letter  = _get_division_code(art.get("division", DIVISION))
+    div_letter  = _get_division_code(art.get("division", ""))
     parent_id   = f"PPH_{div_letter}-TempSubCat"
     key_generic = art["generic_code"]
 
@@ -757,11 +827,7 @@ def build_product_xml(art, brand, brand_code, comp_code, sbu, season_id, mdd=Non
     kv.set("KeyID", "KEY_InboundArticle")
     kv.text = key_generic
 
-    # No Product Name column — same `display_name or item_number` fallback the
-    # price-list ETL applies to <Name> and AT_PrincipalStyleDescription.
-    ET.SubElement(g_el, f"{{{STIBO_NS}}}Name").text = (
-        art.get("display_name") or item_number
-    )
+    ET.SubElement(g_el, f"{{{STIBO_NS}}}Name").text = art["display_name"] or item_number
 
     cr_merch = ET.SubElement(g_el, f"{{{STIBO_NS}}}ClassificationReference")
     cr_merch.set("ClassificationID", f"CLH_{brand.replace(' ', '')}Articles")
@@ -797,18 +863,19 @@ def run(args, auditor=None):
     Entry point called by new_balance/lambda_function.py (or CLI).
     args must have: brand, brand_code, comp_code, sbu, season, seq
     """
-    def first(d: Path, ext="*.xlsx"):
-        files = list(d.glob(ext))
+    def first(d: Path):
+        files = [f for pat in ("*.xlsx", "*.xlsm") for f in d.glob(pat)]
         return files[0] if files else None
 
     mdd_f    = first(MDD_DIR)
     attr_f   = first(ATTR_DIR)
-    ll_files = list(LINELIST_DIR.glob("*.xlsx"))
+    # Preline arrives as .xlsm (macro-enabled) — accept both extensions.
+    ll_files = [f for pat in ("*.xlsx", "*.xlsm") for f in LINELIST_DIR.glob(pat)]
 
     for label, val in [
-        ("MDD",           mdd_f),
-        ("Attributes",    attr_f),
-        ("GTM Line List", ll_files),
+        ("MDD",               mdd_f),
+        ("Attributes",        attr_f),
+        ("Preline Line List", ll_files),
     ]:
         if not val:
             log.error("No %s file found — aborting.", label)
@@ -827,11 +894,11 @@ def run(args, auditor=None):
     season_id      = f"CLH_{args.brand_code}_{sea_prefix}{sea_year}"
 
     for ll_path in ll_files:
-        log.info("─── Processing GTM Footwear Line List: %s ───", ll_path.name)
+        log.info("─── Processing App/Acc Preline Line List: %s ───", ll_path.name)
 
-        ll = GTMFootwearLineListLoader(ll_path)
+        ll = AppAccPrelineLoader(ll_path)
         if ll.df.empty:
-            log.warning("[GTM-FW] Empty dataframe — skipping.")
+            log.warning("[AppAccPreline] Empty dataframe — skipping.")
             continue
 
         item_col = next(
@@ -844,7 +911,7 @@ def run(args, auditor=None):
                 rows.append(row)
 
         total_rows = len(rows)
-        log.info("[GTM-FW] %d valid SKU rows to process", total_rows)
+        log.info("[AppAccPreline] %d valid SKU rows to process", total_rows)
 
         out_name = f"{ll_path.stem}.xml"
         out_path = XML_OUT_DIR / out_name
@@ -867,24 +934,16 @@ def run(args, auditor=None):
         mapped_skus = [m for _, m, _ in ordered]
         del ordered
 
-        # TEST LIMIT: uncomment to process only specific input-Excel rows.
-        # Filters on the true 1-based Excel row number (tracked via
-        # "_ExcelRow" in GTMFootwearLineListLoader / "excel_row" in map_sku),
-        # NOT list position — safe even if blank rows exist elsewhere in the
-        # sheet, since positional slicing would shift after row-dropping.
-        TEST_ROWS = {833, 844}
-        mapped_skus = [m for m in mapped_skus if m.get("excel_row") in TEST_ROWS]
-        # log.info(
-        #     "[GTM-FW][TEST LIMIT] Restricted to Excel rows %s → %d SKU(s) matched",
-        #     sorted(TEST_ROWS), len(mapped_skus),
-        # )
+        # TEST LIMIT: uncomment the line below and set the first/last row numbers
+        # (1-based, inclusive — row 1 = first data row). e.g. 10, 20 → rows 10-20 only.
+        START_ROW, END_ROW = 100, 101; mapped_skus = mapped_skus[START_ROW - 1:END_ROW]
 
         # Guard the one deviation: KEY_InboundArticle must stay 1:1 with rows.
-        keys = [m["generic_code"] for m in mapped_skus if m.get("item_number")]
+        keys  = [m["generic_code"] for m in mapped_skus if m.get("item_number")]
         dupes = len(keys) - len(set(keys))
         if dupes:
             log.warning(
-                "[GTM-FW] %d duplicate KEY_InboundArticle value(s) — "
+                "[AppAccPreline] %d duplicate KEY_InboundArticle value(s) — "
                 "articles will be merged in STEP.", dupes,
             )
             all_warnings.append(
@@ -942,7 +1001,7 @@ def run(args, auditor=None):
         print(f"  XML file size       : {file_kb}KB",     flush=True)
         print("════════════════════════════════════════════════════", flush=True)
 
-    rpt_path = LOG_DIR / f"validation_nb_footwear_gtm_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    rpt_path = LOG_DIR / f"validation_nb_appacc_preline_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
     with open(rpt_path, "w") as f:
         f.write(f"Run: {datetime.now()}\nTotal warnings: {len(all_warnings)}\n\n")
         f.write("\n".join(all_warnings) if all_warnings else "✓ No issues found.")
@@ -961,14 +1020,14 @@ def run(args, auditor=None):
 
 def main():
     p = argparse.ArgumentParser(
-        description="Stibo Inbound XML Generator — New Balance Footwear GTM Line Sheet v1.0"
+        description="Stibo Inbound XML Generator — New Balance App/Acc Preline v1.0"
     )
-    p.add_argument("--brand",      default="New Balance")
-    p.add_argument("--brand-code", default="NEW")
-    p.add_argument("--comp-code",  default="0000")
-    p.add_argument("--sbu",        default="FW")
-    p.add_argument("--season",     default="SS27")
-    p.add_argument("--seq",        default=1, type=int)
+    p.add_argument("--brand",        default="New Balance")
+    p.add_argument("--brand-code",   default="NEW")
+    p.add_argument("--comp-code",    default="0000")
+    p.add_argument("--sbu",          default="AP")
+    p.add_argument("--season",       default="SS27")
+    p.add_argument("--seq",          default=1, type=int)
     p.add_argument("--country-code", default="")
     run(p.parse_args())
 

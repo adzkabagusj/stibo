@@ -58,7 +58,8 @@ os.environ["LAMBDA_TMP_DIR"] = TMP_WORKDIR
 # ── ETL modules ──────────────────────────────────────────────────────────────
 import reebok.article_master_apparel as apparel_etl  # noqa: E402  # Article Master (Apparel)
 import reebok.article_master_footwear as footwear_etl  # noqa: E402  # Article Master (Footwear)
-import reebok.ean_main as ean_etl  # noqa: E402  # EAN Source (barcode data — apparel + footwear)
+import reebok.ean_main as ean_etl
+import reebok.recap_main as recap_etl  # noqa: E402  # EAN Source (barcode data — apparel + footwear)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging
@@ -98,6 +99,7 @@ FILE_TYPE_KEYWORDS: dict[str, list[str]] = {
     # Reebok Footwear Article Master
     # Example: "Reebok article master data with image - FOOTWEAR (SS27).xlsx"
     "footwear": ["footwear"],
+    "recap": ["recap", "recap sample"],
     # Shared / global
     # NOTE: kept specific ("master data dictionary" / "mdd") on purpose —
     # Reebok's own principal filename contains the substring "article

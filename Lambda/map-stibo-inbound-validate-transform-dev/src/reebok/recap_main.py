@@ -86,7 +86,7 @@ log = logging.getLogger(__name__)
 LOV_BRAND = {
     "ADI": "ADIDAS", "NIK": "NIKE", "NEW": "NEW BALANCE",
     "SMI": "SMIGGLE", "ALD": "ALDO", "CRO": "CROCS",
-    "RBK": "REEBOK",   "BIR": "BIRKENSTOCK",
+    "REE": "REEBOK",   "BIR": "BIRKENSTOCK",
 }
 LOV_GENDER = {"M": "Male", "F": "Female", "U": "Unisex"}
 LOV_AGE = {
@@ -1223,7 +1223,7 @@ def _parse_season(season: str) -> tuple[str, str]:
     return s[:2], ""
 
 
-def map_article_reebok(recap_row: dict, brand_code: str = "RBK") -> dict:
+def map_article_reebok(recap_row: dict, brand_code: str = "REE") -> dict:
     """
     Map one REEBOK recap row → unified article dict (similar to NB Licensed pattern).
 
@@ -1732,7 +1732,7 @@ def _add_variant_values(
         _val(vals_el, attr_id, value=value, id_val=id_val)
 
     # ── KEY_Variant defining attributes (required for key resolution) ──
-    b_code  = art.get("brand_code", "RBK")
+    b_code  = art.get("brand_code", "REE")
     _w("AT_Brand",       id_val=b_code)
     _w("AT_PrincipalStyleCode", art["sap_style_code"])
     _w("AT_Size",               sap_size_code,         id_val=sap_size_code)
@@ -1895,13 +1895,102 @@ def _process_article(row_tuple):
 # SECTION 7 — ORCHESTRATOR
 # ══════════════════════════════════════════════════════════════════
 
+def _parse_metadata_from_filename(dirs: dict, triggered_file_type: str = None) -> dict:
+    """
+    Parse comp_code, sbu, brand, brand_code, season, seq from the
+    triggered brand file's filename.
+
+    Supports two formats:
+      1. Strict dash-separated: {CompanyCode}-{SBU}-{Brand}-{FileType}-{Season}-{Seq}.xlsx
+      2. Loose (as used for Reebok's NuORDER export):
+         "Reebok article master data with image - APPAREL (SS27).xlsx"
+         → season is pulled from anywhere in the filename (e.g. "SS27").
+    """
+    candidate_dirs = []
+    if triggered_file_type and triggered_file_type in dirs:
+        candidate_dirs.append(dirs[triggered_file_type])
+
+    seen: set = set()
+    candidate_dirs = [
+        d for d in candidate_dirs
+        if d is not None and str(d) not in seen and not seen.add(str(d))
+    ]
+
+    BRAND_CODE = "REE"
+
+    for folder in candidate_dirs:
+        if not folder or not folder.exists():
+            continue
+        xls_files = list(folder.glob("*.xlsx")) + list(folder.glob("*.xlsm"))
+        for xlsx_file in xls_files:
+            stem = xlsx_file.stem
+            log.info("Attempting metadata parse from filename: '%s'", stem)
+
+            parts = re.split(r"\s*-\s*", stem)
+            if len(parts) >= 6:
+                comp_code = parts[0].strip()
+                sbu       = parts[1].strip()
+                brand     = parts[2].strip().title()
+
+                season = None
+                season_idx = None
+                for i, p in enumerate(parts):
+                    if re.match(r"^[A-Z]{2}\d{2,4}$", p.strip(), re.IGNORECASE):
+                        season     = p.strip().upper()
+                        season_idx = i
+                        break
+
+                if season and season_idx:
+                    trailing     = parts[season_idx + 1:]
+                    seq          = next((int(p) for p in reversed(trailing) if p.strip().isdigit()), 1)
+                    country_code = next(
+                        (p.strip().upper() for p in trailing
+                         if re.match(r"^[A-Z]{2,3}$", p.strip(), re.IGNORECASE) and not p.strip().isdigit()),
+                        "",
+                    )
+                    log.info(
+                        "Parsed (strict): comp=%s sbu=%s brand=%s season=%s seq=%s country=%s",
+                        comp_code, sbu, brand, season, seq, country_code,
+                    )
+                    return {
+                        "comp_code": comp_code, "sbu": sbu, "brand": brand,
+                        "brand_code": BRAND_CODE, "season": season, "seq": seq,
+                        "country_code": country_code,
+                    }
+
+            # ── Fallback: extract season from anywhere in filename ────
+            season_match = re.search(r"\b([A-Z]{2})(\d{2,4})\b", stem, re.IGNORECASE)
+            if season_match:
+                season_prefix = season_match.group(1).upper()
+                season_year   = season_match.group(2)
+                if len(season_year) == 2:
+                    season_year = f"20{season_year}"
+                season = f"{season_prefix}{season_year}"
+
+                log.info(
+                    "Parsed (fallback): brand=Reebok code=%s season=%s (defaults applied)",
+                    BRAND_CODE, season,
+                )
+                return {
+                    "comp_code": "0888", "sbu": "SP", "brand": "Reebok",
+                    "brand_code": BRAND_CODE, "season": season, "seq": 1,
+                    "country_code": "",
+                }
+
+    log.warning("Could not parse metadata from filename — using defaults")
+    return {
+        "comp_code": "0888", "sbu": "SP", "brand": "Reebok",
+        "brand_code": "REE", "season": "SS27", "seq": 1,
+        "country_code": "",
+    }
+
 def run(args, auditor=None):
     """
     Main entry point for REEBOK Licensed Recap.
 
     args must have attributes:
         brand       str   e.g. "REEBOK"
-        brand_code  str   e.g. "RBK"
+        brand_code  str   e.g. "REE"
         comp_code   str   e.g. "0888"
         sbu         str   e.g. "SP"
         season      str   e.g. "SS26"
@@ -2145,7 +2234,7 @@ def run(args, auditor=None):
 def main():
     p = argparse.ArgumentParser(description="Stibo Inbound XML Generator — REEBOK Licensed Recap v1.0")
     p.add_argument("--brand",      default="REEBOK")
-    p.add_argument("--brand-code", default="RBK")
+    p.add_argument("--brand-code", default="REE")
     p.add_argument("--comp-code",  default="0888")
     p.add_argument("--sbu",        default="SP")
     p.add_argument("--season",     default="SS26")

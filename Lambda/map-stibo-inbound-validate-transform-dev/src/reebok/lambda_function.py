@@ -116,6 +116,7 @@ FILE_TYPE_KEYWORDS: dict[str, list[str]] = {
 REQUIRED_TYPES_BY_TRIGGER: dict[str, set[str]] = {
     "apparel":  {"apparel", "mdd", "attributes"},
     "footwear": {"footwear", "mdd", "attributes"},
+    "recap":    {"recap", "mdd", "attributes"},
     # ean_main.py only needs the MDD (for the Size LOV lookup) — it emits
     # barcode data only, no RNA/brand-mapping attributes.
     "ean":      {"ean", "mdd"},
@@ -130,6 +131,7 @@ GLOBAL_TYPES: set[str] = {"mdd", "attributes"}
 ETL_DISPATCHER: dict[str, object] = {
     "apparel":  apparel_etl,
     "footwear": footwear_etl,
+    "recap":    recap_etl,
     "ean":      ean_etl,
 }
 
@@ -343,6 +345,7 @@ def _prepare_tmp_dirs() -> dict:
         "apparel":    workdir / "input" / "apparel",
         "footwear":   workdir / "input" / "footwear",
         "ean":        workdir / "input" / "ean",
+        "recap":      workdir / "input" / "recap",
         "mdd":        workdir / "input" / "mdd",
         "attributes": workdir / "input" / "attributes",
         "xml":        workdir / "output" / "xml",

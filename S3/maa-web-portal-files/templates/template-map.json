@@ -444,11 +444,11 @@
     "Licensed": {
       "Recap Sample": {
         "file": "Recap_Sample_Reebok.xlsx",
-        "sheet": "RBK"
+        "sheet": "REE"
       },
       "Recap Sample 2nd Ingestion": {
         "file": "Recap_Sample_Reebok_2nd_Ingestion.xlsx",
-        "sheet": "RBK"
+        "sheet": "REE"
       }
     }
   },

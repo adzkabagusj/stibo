@@ -18,7 +18,7 @@ shared brand-mapping workbook, which maps:
     Stibo Attribute              ← Brand File Column
     ────────────────────────────────────────────────
     Principal Style Code         ← Article Number
-    Principal Style Description  ← Name  (strip "Reebok"/"RBK" tokens)
+    Principal Style Description  ← Name  (strip "Reebok"/"REE" tokens)
     Principal Color Description  ← Color Name
     Principal Gender Description ← Gender
     Principal Age Description    ← Age Group
@@ -236,10 +236,10 @@ def _s(v) -> str:
 
 
 def _clean_name(name: str) -> str:
-    """Strip standalone 'Reebok' / 'RBK' tokens from a product name (per mapping notes)."""
+    """Strip standalone 'Reebok' / 'REE' tokens from a product name (per mapping notes)."""
     if not name:
         return name
-    cleaned = re.sub(r"\b(REEBOK|RBK)\b", "", name, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\b(REEBOK|REE)\b", "", name, flags=re.IGNORECASE)
     return re.sub(r"\s{2,}", " ", cleaned).strip(" -")
 
 

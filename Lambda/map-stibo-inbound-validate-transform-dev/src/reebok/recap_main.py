@@ -961,7 +961,7 @@ class ReebokRecapLoader:
         wb = openpyxl.load_workbook(self.path, read_only=True, data_only=True)
 
         # Resolve active sheet using smart detection
-        target = self._find_best_sheet(wb, ['RBK', 'REEBOK'])
+        target = self._find_best_sheet(wb, ['REE', 'RBK', 'REEBOK'])
         log.info("[Recap-REEBOK] Using active sheet: '%s'", target)
         
         ws   = wb[target]

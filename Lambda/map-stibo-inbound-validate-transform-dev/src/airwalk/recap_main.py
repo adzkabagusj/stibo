@@ -1138,7 +1138,7 @@ def map_article_airwalk(recap_row: dict, brand_code: str = "AIW") -> dict:
     return {
         # Core identifiers
         "article_no":        supp_art,
-        "sap_style_code":    supp_art,           # Supplier article number
+        "sap_style_code":    generic_code[3:],           # Derived SAP Style Code
         "model_name":        model_name,
         "brand_code":        brand_code,
 
@@ -1307,7 +1307,7 @@ def _add_generic_values(
     _w("AT_PrincipalStyleCode",  art["article_no"])
     _w("AT_PrincipalColorName",  art["colour"])
     _w("AT_PrincipalColorCode",  art["colour_code"])
-    # _w("AT_SAPStyleCode",        art["sap_style_code"])
+    _w("AT_SAPStyleCode",        art["sap_style_code"])
     
     # AT_PrincipalSize → Size range
     if art.get("size_range"):
@@ -1333,6 +1333,7 @@ def _add_generic_values(
     at_generic_val = art["generic_code"]
     art["at_generic_val"] = at_generic_val
     _w("AT_InboundGenericCode", at_generic_val)
+    _w("AT_Generic", at_generic_val)
 
     # ── Gender ───────────────────────────────────────────────────
     # AT_Gender: col G → col I → MDD Gender LOV

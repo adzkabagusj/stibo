@@ -745,23 +745,29 @@ def _derive_generic_article_code(
     article_type_map = {
         "REGULAR": "R",
         "SSE": "X",
+        "LICENSE": "L",
+        "LICENSED": "L",
     }
-    article_type_code = article_type_map.get(article_type_raw.upper())
+    article_type_code = article_type_map.get(article_type_raw.upper(), "R")  # Default to R
 
     season_raw = _clean_text(row.get("Season")).upper()
     season_prefix = season_raw[:2]
     season_code_map = {
         "SS": "S",
         "FW": "F",
+        "AW": "F",  # Autumn Winter = Fall Winter
+        "HO": "H",
     }
-    season_code = season_code_map.get(season_prefix)
-    season_year = season_raw[-2:] if len(season_raw) >= 4 else ""
+    season_code = season_code_map.get(season_prefix, season_prefix[:1] if season_prefix else "S")
+    
+    _yr_match = re.search(r"(\d{2})$", season_raw)
+    season_year = _yr_match.group(1) if _yr_match else "00"
 
     supplier_article = _clean_text(row.get("Supp Art #"))
-    supplier_suffix = supplier_article[-3:] if len(supplier_article) >= 3 else ""
+    supplier_suffix = supplier_article[-3:].rjust(3, "0") if supplier_article else "000"
 
     color_code = _clean_text(row.get("Color Code"))
-    color_suffix = color_code[-2:] if len(color_code) >= 2 else ""
+    color_suffix = color_code[-2:].rjust(2, "0") if color_code else "00"
 
     missing = []
     if not article_type_code:
@@ -883,7 +889,27 @@ def _build_product_xml(
 
     values = ET.SubElement(product, f"{{{STIBO_NS}}}Values")
     written: set[str] = set()
+    
+    # ── Core identifiers ─────────────────────────────────────────
     _write_simple_value(values, written, "AT_InboundGenericCode", key)
+    _write_simple_value(values, written, "AT_Generic", key)
+    
+    supp_art = _clean_text(row.get("Supp Art #"))
+    if supp_art:
+        _write_simple_value(values, written, "AT_PrincipalStyleCode", supp_art)
+        # SAP Style Code is the generic code (key) without the 3-char brand prefix
+        _write_simple_value(values, written, "AT_SAPStyleCode", key[3:])
+        
+    color = _clean_text(row.get("Color"))
+    if color:
+        _write_simple_value(values, written, "AT_PrincipalColorName", color)
+        
+    color_code = _clean_text(row.get("Color Code"))
+    if color_code:
+        _write_simple_value(values, written, "AT_PrincipalColorCode", color_code)
+        
+    _write_simple_value(values, written, "AT_Brand", "", id_val=brand_code)
+    _write_simple_value(values, written, "AT_BrandGroup", "", id_val=brand.upper())
 
     for entry in mappings:
         if entry.attribute_id in written:

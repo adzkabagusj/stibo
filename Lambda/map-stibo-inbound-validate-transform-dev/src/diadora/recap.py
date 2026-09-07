@@ -681,8 +681,9 @@ class AttributeListLoader:
 
 
 class RecapWorkbook:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, expected_sheet: str = ""):
         self.path = path
+        self.expected_sheet = expected_sheet
         self.sheet_name = ""
         self.header_row_idx = -1
         self.columns: dict[str, int] = {}
@@ -702,6 +703,13 @@ class RecapWorkbook:
                 except ValueError:
                     continue
                 score = len({_norm(h) for h in columns} & {_norm(h) for h in RECAP_HEADER_HINTS})
+                
+                # Priority logic
+                if self.expected_sheet and sheet_name.upper() == self.expected_sheet.upper():
+                    score += 1000
+                elif sheet_name.lower().startswith("sheet") and score > 0:
+                    score -= 0.5
+
                 if best is None or score > best[0]:
                     best = (score, sheet_name, rows, header_idx, columns)
 
@@ -767,6 +775,17 @@ def _derive_generic_article_code(
     supplier_suffix = supplier_article[-3:].rjust(3, "0") if supplier_article else "000"
 
     color_code = _clean_text(row.get("Color Code"))
+    if not color_code:
+        # Fallback to color name to ensure unique generic codes
+        color_name = _clean_text(row.get("Color")).upper()
+        words = re.findall(r'[A-Z0-9]+', color_name)
+        if len(words) > 1:
+            color_code = words[0][0] + words[-1][0]
+        elif len(color_name) >= 2:
+            color_code = color_name[0] + color_name[-1]
+        else:
+            color_code = color_name.ljust(2, "0")
+        
     color_suffix = color_code[-2:].rjust(2, "0") if color_code else "00"
 
     missing = []
@@ -1000,7 +1019,7 @@ def run(args, auditor=None) -> None:
     total_written = 0
     for recap_file in recap_files:
         filename_meta = _parse_metadata_from_input_filename(recap_file.stem)
-        recap = RecapWorkbook(recap_file)
+        recap = RecapWorkbook(recap_file, expected_sheet=args.brand_code)
         mappings = attr_loader.build_recap_mappings(recap.columns)
         if not mappings:
             log.warning("[Recap] No usable direct mappings found for %s", recap_file.name)

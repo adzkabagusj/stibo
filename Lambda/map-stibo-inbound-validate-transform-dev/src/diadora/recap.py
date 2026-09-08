@@ -113,7 +113,32 @@ DIA_RECAP_CATEGORY_TO_SPORTS_CAT: dict[str, str] = {
     "KIDS":               "Lifestyle / Casual",
     "FUTSAL":             "Soccer",
     "FITNESS":            "Fitness / Training",
+    "ACT RUNNING":        "Running",
+    "ACT SOCCER":         "Soccer",
+    "ACT TENNIS":         "Tennis / Padel",
+    "LIFESTYLE SPORTSWEAR": "Lifestyle / Casual",
 }
+
+LOV_AGE = {
+    "AD": "Adults", "CH": "Children", "IN": "Infant",
+    "AA": "All Ages", "JR": "Junior", "K": "Kids",
+}
+
+LOV_BY_AGE = {
+    "ADULT": "Adult", "ADULTS": "Adult", "AD": "Adult",
+    "JUNIOR": "Junior", "CH": "Children",
+    "CHILDREN": "Children", "CHILD": "Children",
+    "KIDS": "Kids", "K": "Kids",
+    "ALL AGES": "All Ages", "AA": "All Ages",
+}
+
+LOV_GENDER = {"M": "Male", "F": "Female", "U": "Unisex"}
+
+DIA_GENDER_MAP = {
+    "MALE": "Male", "FEMALE": "Female", "UNISEX": "Unisex",
+    "BOYS": "Male", "GIRLS": "Female", "MEN": "Male", "WOMEN": "Female"
+}
+
 
 RECAP_HEADER_HINTS = {
     "brand",
@@ -162,6 +187,23 @@ def _clean_text(value) -> str:
     text = re.sub(r"\s+", " ", text)
     return "" if text.lower() in {"none", "nan"} else text
 
+
+
+def _fmt_date(v) -> str:
+    from datetime import datetime
+    if isinstance(v, datetime):
+        return v.strftime('%d-%m-%Y')
+    if hasattr(v, 'strftime'):
+        return v.strftime('%d-%m-%Y')
+    raw = _clean_text(v)
+    if not raw:
+        return raw
+    for fmt in ('%Y-%m-%d', '%d/%m/%Y', '%m/%d/%Y', '%d.%m.%Y'):
+        try:
+            return datetime.strptime(raw, fmt).strftime('%d-%m-%Y')
+        except (ValueError, TypeError):
+            pass
+    return raw
 
 def _parse_metadata_from_input_filename(stem: str) -> dict[str, str]:
     """Parse season/article type/country tokens from the source filename."""
@@ -850,6 +892,116 @@ def _write_value(parent: ET.Element, entry: MappingEntry, raw_value: object, mdd
     value_el.text = value
 
 
+class RNALoader:
+    """
+    Loads the 'Source Mapping Related RNA' tab from the Attributes List workbook.
+    Maps (Country Name, Company Code, SBU, Brand Code) -> Brand Type + Brand Category.
+    """
+
+    RNA_SHEET_KEYWORDS = ["RNA", "SOURCE MAPPING"]
+
+    @staticmethod
+    def _norm_country(v: str) -> str:
+        return (v or "").strip().upper()
+
+    @staticmethod
+    def _norm_comp_code(v: str) -> str:
+        s = (v or "").strip()
+        if not s:
+            return ""
+        if s.endswith(".0"):
+            s = s[:-2]
+        s2 = s.lstrip("0")
+        return s2 if s2 else "0"
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.lookup: dict[tuple, dict] = {}
+        self._load()
+
+    def _load(self):
+        log.info("[RNA] Loading from: %s", self.path.name)
+        import openpyxl
+        wb = openpyxl.load_workbook(self.path, read_only=True, data_only=True)
+
+        sheet_name = next(
+            (s for s in wb.sheetnames if any(kw in s.upper() for kw in self.RNA_SHEET_KEYWORDS)),
+            None,
+        )
+        if not sheet_name:
+            log.warning("[RNA] 'Source Mapping Related RNA' tab not found in %s", self.path.name)
+            wb.close()
+            return
+
+        log.info("[RNA] Using sheet: '%s'", sheet_name)
+        rows = list(wb[sheet_name].iter_rows(values_only=True))
+
+        hdr_idx = next(
+            (i for i, r in enumerate(rows)
+             if any(isinstance(v, str) and "COUNTRY" in v.upper() for v in r if v)),
+            None,
+        )
+        if hdr_idx is None:
+            log.warning("[RNA] Cannot find header row in sheet '%s'", sheet_name)
+            wb.close()
+            return
+
+        hdr = rows[hdr_idx]
+        col = {str(h).strip().upper(): i for i, h in enumerate(hdr) if h}
+
+        def _find(*candidates) -> int | None:
+            for c in candidates:
+                if c.upper() in col:
+                    return col[c.upper()]
+            return None
+
+        c_country = _find("COUNTRY", "COUNTRY NAME")
+        c_comp    = _find("COMPANY CODE", "COMP CODE", "COMPCODE", "COMP_CODE")
+        c_sbu     = _find("SBU")
+        c_bcode   = _find("BRANDCODE", "BRAND CODE", "REPORTING BRAND CODE MAPPED")
+        c_btype   = _find("BRANDTYPE_DETAIL", "BRAND TYPE", "AT_BRANDTYPE", "BRANDTYPE")
+        c_bcat    = _find("BRANDCATEGORY", "BRAND CATEGORY", "AT_BRANDCATEGORY", "BRANDCATEGORY")
+        c_bgroup  = _find("BRANDGROUP", "BRAND GROUP")
+
+        def _cell(row, idx):
+            if idx is None or idx >= len(row) or row[idx] is None:
+                return ""
+            return str(row[idx]).strip()
+
+        for row in rows[hdr_idx + 1:]:
+            country = _cell(row, c_country)
+            if not country:
+                continue
+            key = (
+                self._norm_country(country),
+                self._norm_comp_code(_cell(row, c_comp)),
+                _cell(row, c_sbu).upper(),
+                _cell(row, c_bcode).upper(),
+            )
+            self.lookup[key] = {
+                "brand_type":     _cell(row, c_btype),
+                "brand_category": _cell(row, c_bcat),
+                "brand_group":    _cell(row, c_bgroup),
+            }
+        wb.close()
+
+
+def _write_multi_value(
+    values_el: ET.Element,
+    written: set[str],
+    attr_id: str,
+    id_val: str,
+) -> None:
+    if attr_id in written:
+        return
+    clean_id = _clean_text(id_val)
+    if not clean_id:
+        return
+    mv = ET.SubElement(values_el, f"{{{STIBO_NS}}}MultiValue")
+    mv.set("AttributeID", attr_id)
+    child = ET.SubElement(mv, f"{{{STIBO_NS}}}Value")
+    child.set("ID", clean_id)
+    written.add(attr_id)
 def _write_simple_value(
     values_el: ET.Element,
     written: set[str],
@@ -876,11 +1028,14 @@ def _build_product_xml(
     row: dict[str, object],
     mappings: list[MappingEntry],
     mdd: MDDLoader,
+    rna: RNALoader,
     brand: str,
     brand_code: str,
     season_id: str,
     row_num: int,
     filename_meta: dict[str, str],
+    comp_code: str,
+    sbu: str,
 ) -> str:
     key = _product_key(row, brand_code, row_num)
     if not key:
@@ -915,7 +1070,7 @@ def _build_product_xml(
     
     supp_art = _clean_text(row.get("Supp Art #"))
     if supp_art:
-        _write_simple_value(values, written, "AT_PrincipalStyleCode", supp_art)
+        _write_simple_value(values, written, "AT_PrincipalStyleCode", key)
         # SAP Style Code is the generic code (key) without the 3-char brand prefix
         _write_simple_value(values, written, "AT_SAPStyleCode", key[3:])
         
@@ -929,6 +1084,69 @@ def _build_product_xml(
         
     _write_simple_value(values, written, "AT_Brand", "", id_val=brand_code)
     _write_simple_value(values, written, "AT_BrandGroup", "", id_val=brand.upper())
+
+    # ── Derived manual mappings ──
+    c_code_for_rna = (filename_meta.get("country") or "").upper()
+    country_name_map = {"ID": "INDONESIA", "PH": "PHILIPPINES", "VN": "VIETNAM", "TH": "THAILAND", "MY": "MALAYSIA", "SG": "SINGAPORE"}
+    country_name = country_name_map.get(c_code_for_rna, c_code_for_rna)
+    
+    brand_cats = rna.lookup.get((
+        RNALoader._norm_country(country_name),
+        RNALoader._norm_comp_code(comp_code),
+        sbu.upper(),
+        brand_code.upper()
+    ), {})
+    b_type = brand_cats.get("brand_type", "LICENCE")
+    b_cat = brand_cats.get("brand_category", "LICENCE")
+
+    _write_simple_value(values, written, "AT_BrandType", "", id_val=b_type)
+    _write_simple_value(values, written, "AT_BrandCategory", "", id_val=b_cat)
+    _write_multi_value(values, written, "AT_CompanyCode", comp_code)
+    _write_multi_value(values, written, "AT_SBU", sbu)
+    
+    if row.get("Division"):
+        _write_simple_value(values, written, "AT_PrincipalMerchandiseHierarchyL1", row.get("Division"))
+    if row.get("MD Category"):
+        _write_simple_value(values, written, "AT_PrincipalMerchandiseHierarchyL2", row.get("MD Category"))
+    if row.get("Image"):
+        _write_simple_value(values, written, "AT_ThumbnailImage", row.get("Image"))
+    if row.get("ETA DATE"):
+        _write_simple_value(values, written, "AT_IncomingMonth", _fmt_date(row.get("ETA DATE")))
+        
+    _write_simple_value(values, written, "AT_SAPArticleCategory", "", id_val="1")
+    _write_simple_value(values, written, "AT_UOM", "", id_val="EA")
+    _write_simple_value(values, written, "AT_PricingDistributionChannel", "", id_val="01")
+    
+    c_code = (filename_meta.get("country") or "").upper()
+    if c_code:
+        cur_map = {"ID": "IDR", "PH": "PHP", "VN": "VND", "TH": "THB", "MY": "MYR", "SG": "SGD"}
+        if c_code in cur_map:
+            _write_simple_value(values, written, "AT_RetailPriceCurrency", "", id_val=cur_map[c_code])
+            
+    gender_raw = _clean_text(row.get("Gender")).upper()
+    gender_code_raw = _clean_text(row.get("Gender Code"))
+    if gender_raw:
+        _write_simple_value(values, written, "AT_PrincipalGenderDescription", gender_raw.title())
+        sap_gender = DIA_GENDER_MAP.get(gender_raw, "")
+        if not sap_gender:
+            sap_gender = LOV_GENDER.get(gender_raw[:1], "")
+        if sap_gender:
+            _write_simple_value(values, written, "AT_Gender", sap_gender, id_val=sap_gender[:1].upper())
+            _write_simple_value(values, written, "AT_BYGender", sap_gender, id_val=sap_gender[:1].upper())
+            
+    if gender_code_raw:
+        _write_simple_value(values, written, "AT_PrincipalGenderCode", gender_code_raw)
+        
+    age_group_val = _clean_text(row.get("Age Group")).title()
+    if age_group_val:
+        _write_simple_value(values, written, "AT_PrincipalAgeDescription", age_group_val)
+        
+        reverse_lov_age = {v.upper(): k for k, v in LOV_AGE.items()}
+        sap_age_lov_id = reverse_lov_age.get(age_group_val.upper(), "AD")
+        _write_simple_value(values, written, "AT_SAPAge", age_group_val, id_val=sap_age_lov_id)
+        
+        by_age_lov_value = LOV_BY_AGE.get(age_group_val.upper(), age_group_val)
+        _write_simple_value(values, written, "AT_BYAge", by_age_lov_value, id_val=by_age_lov_value.upper())
 
     for entry in mappings:
         if entry.attribute_id in written:
@@ -956,28 +1174,29 @@ def _build_product_xml(
     _write_simple_value(values, written, "AT_BYArticleType", article_type, id_val=article_type or None)
     _write_simple_value(values, written, "AT_Season", season_code, id_val=season_code or None)
     _write_simple_value(values, written, "AT_SeasonYear", season_year)
-    _write_simple_value(values, written, "AT_Country", country_code, id_val=country_code or None)
+    _write_simple_value(values, written, "AT_Country", "", id_val=country_code)
     _write_simple_value(values, written, "AT_SAPProductFlag", "", id_val="A")
     _write_simple_value(values, written, "AT_MaterialType", "", id_val="ZINA")
 
     # ── Sports Category ──────────────────────────────────────────
-    category_raw = _clean_text(row.get("Category"))
+    category_raw = _clean_text(row.get("Collection") or row.get("Category"))
     if category_raw:
         sports_cat_label = DIA_RECAP_CATEGORY_TO_SPORTS_CAT.get(category_raw.upper(), "")
         if sports_cat_label:
-            # LOV key is normalized: "Sports Category LOV" → "sports category"
-            sports_lov = mdd.lovs.get("sports category", {})
-            
-            # Lookup uses normalized label
-            sports_cat_id = sports_lov.get(_norm(sports_cat_label), "")
-            
-            # Try compact normalized if not found
+            hardcoded_lov = {
+                "RUNNING": "01", "SOCCER": "02", "BASKETBALL": "03",
+                "TENNIS / PADEL": "04", "FITNESS / TRAINING": "05", "SWIMMING": "06",
+                "LIFESTYLE / CASUAL": "07", "OUTDOOR": "08", "ACTION SPORTS": "09",
+                "OTHER": "10", "NOT APPLICABLE": "11",
+            }
+            sports_cat_id = hardcoded_lov.get(sports_cat_label.upper())
             if not sports_cat_id:
-                sports_cat_id = sports_lov.get(_compact_norm(sports_cat_label), "")
-            
-            # Zero-pad 1-digit IDs to 2 digits
-            if sports_cat_id and sports_cat_id.isdigit() and len(sports_cat_id) == 1:
-                sports_cat_id = f"0{sports_cat_id}"
+                sports_lov = mdd.lovs.get("sports category", {})
+                sports_cat_id = sports_lov.get(_norm(sports_cat_label), "")
+                if not sports_cat_id:
+                    sports_cat_id = sports_lov.get(_compact_norm(sports_cat_label), "")
+                if sports_cat_id and sports_cat_id.isdigit() and len(sports_cat_id) == 1:
+                    sports_cat_id = f"0{sports_cat_id}"
             
             if sports_cat_id:
                 _write_simple_value(values, written, "AT_SportsCategoryEN", "", id_val=sports_cat_id)
@@ -1015,6 +1234,7 @@ def run(args, auditor=None) -> None:
 
     mdd = MDDLoader(mdd_file)
     attr_loader = AttributeListLoader(attr_file, mdd, brand="DIADORA")
+    rna = RNALoader(attr_file)
 
     total_written = 0
     for recap_file in recap_files:
@@ -1049,11 +1269,14 @@ def run(args, auditor=None) -> None:
                     row,
                     mappings,
                     mdd,
+                    rna,
                     args.brand,
                     args.brand_code,
                     season_id,
                     idx,
                     filename_meta,
+                    args.comp_code,
+                    args.sbu,
                 )
                 if not product_xml:
                     continue

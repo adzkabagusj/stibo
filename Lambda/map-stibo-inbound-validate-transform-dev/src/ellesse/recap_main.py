@@ -631,10 +631,12 @@ class RNALoader:
         c_bcode   = _find("BRANDCODE", "BRAND CODE", "REPORTING BRAND CODE MAPPED")
         c_btype   = _find("BRANDTYPE_DETAIL", "BRAND TYPE", "AT_BRANDTYPE", "BRANDTYPE")
         c_bcat    = _find("BRANDCATEGORY", "BRAND CATEGORY", "AT_BRANDCATEGORY", "BRANDCATEGORY")
+        c_bgroup  = _find("BRANDGROUP", "BRAND GROUP")
 
         missing = [nm for nm, idx in [
             ("Country", c_country), ("CompCode", c_comp), ("SBU", c_sbu),
             ("BrandCode", c_bcode), ("BrandType", c_btype), ("BrandCategory", c_bcat),
+            ("BrandGroup", c_bgroup),
         ] if idx is None]
         if missing:
             log.warning("[RNA] Missing columns in '%s': %s", sheet_name, missing)
@@ -658,6 +660,7 @@ class RNALoader:
             self.lookup[key] = {
                 "brand_type":     _cell(row, c_btype),
                 "brand_category": _cell(row, c_bcat),
+                "brand_group":    _cell(row, c_bgroup),
             }
             count += 1
 
@@ -672,7 +675,7 @@ class RNALoader:
             (sbu        or "").strip().upper(),
             (brand_code or "").strip().upper(),
         )
-        return self.lookup.get(key, {"brand_type": "", "brand_category": ""})
+        return self.lookup.get(key, {"brand_type": "", "brand_category": "", "brand_group": ""})
 
     def get_fuzzy(self, country_name: str, sbu: str, brand_code: str) -> dict:
         """Match on country + brand only — ignores comp_code."""
@@ -687,7 +690,7 @@ class RNALoader:
         for (kc, _, ks, kb), val in self.lookup.items():
             if kc == c and kb == b:
                 return val
-        return {"brand_type": "", "brand_category": ""}
+        return {"brand_type": "", "brand_category": "", "brand_group": ""}
 
 
 class EllesseRecapLoader:
@@ -916,17 +919,17 @@ def _resolve_retail_price_currency(country_code: str, mdd: dict | None = None) -
 
 
 def _fmt_date(v) -> str:
-    """Format a date to dd-Mon-YYYY lowercase."""
+    """Format a date to DD-MM-YYYY."""
     if isinstance(v, datetime):
-        return v.strftime("%d-%b-%Y").lower()
+        return v.strftime("%d-%m-%Y")
     if hasattr(v, "strftime"):
-        return v.strftime("%d-%b-%Y").lower()
+        return v.strftime("%d-%m-%Y")
     raw = _s(v)
     if not raw:
         return raw
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d.%m.%Y"):
         try:
-            return datetime.strptime(raw, fmt).strftime("%d-%b-%Y").lower()
+            return datetime.strptime(raw, fmt).strftime("%d-%m-%Y")
         except (ValueError, TypeError):
             pass
     return raw
@@ -1017,8 +1020,12 @@ def map_article_ellesse(recap_row: dict, brand_code: str = "ELL") -> dict:
     upper        = _s(recap_row.get("Upper \nMaterial") or recap_row.get("Upper Material") or "")
     supplier     = _s(recap_row.get("Supplier"))
     fob_raw      = _s(recap_row.get("FOB Price"))
-    currency_raw = _s(recap_row.get("Currency"))
+    currency_raw = _s(recap_row.get("FOB Currency") or recap_row.get("Currency"))
     season       = _s(recap_row.get("Season"))
+    age_group    = _s(recap_row.get("Age Group"))
+    md_category  = _s(recap_row.get("MD Category"))
+    bci          = _s(recap_row.get("BCI"))
+    eta_date     = _s(recap_row.get("ETA DATE"))
 
     # ── Derived fields ──────────────────────────────────────────
     # SAP Gender
@@ -1189,6 +1196,10 @@ def map_article_ellesse(recap_row: dict, brand_code: str = "ELL") -> dict:
         # Derived codes
         "generic_code":      generic_code,
         "season_raw":        season,
+        "age_group":         age_group,
+        "md_category":       md_category,
+        "bci":               bci,
+        "eta_date":          eta_date,
     }
 
 
@@ -1301,10 +1312,10 @@ def _add_generic_values(
     # ── Brand ────────────────────────────────────────────────────
     brand_lov_id = art["brand_code"]
     _w("AT_Brand",      id_val=brand_lov_id)
-    _w("AT_BrandGroup", id_val=brand_name.upper())
+    _w("AT_BrandGroup", id_val=art.get("brand_group") or brand_name.upper())
 
     # ── Principal identifiers ────────────────────────────────────
-    _w("AT_PrincipalStyleCode",  art["article_no"])
+    _w("AT_PrincipalStyleCode",  art["generic_code"])
     _w("AT_PrincipalColorName",  art["colour"])
     _w("AT_PrincipalColorCode",  art["colour_code"])
     _w("AT_SAPStyleCode",        art["sap_style_code"])
@@ -1357,13 +1368,21 @@ def _add_generic_values(
 
     # ── Age ──────────────────────────────────────────────────────
     # AT_SAPAge: col G → col H → MDD Age LOV (col A → col B)
-    sap_age_lov_value = art.get("sap_age_lov_value", "")
-    sap_age_lov_id    = art.get("sap_age_lov_id", "")
-    if not sap_age_lov_value:
-        # fallback to hardcoded LOV_AGE
-        age_code          = art["age_code"]
-        sap_age_lov_value = LOV_AGE.get(age_code, age_code)
-        sap_age_lov_id    = age_code
+    # First priority: explicit Age Group column
+    age_group_val = art.get("age_group")
+    if age_group_val:
+        sap_age_lov_value = age_group_val.title()
+        reverse_lov_age = {v.upper(): k for k, v in LOV_AGE.items()}
+        sap_age_lov_id = reverse_lov_age.get(sap_age_lov_value.upper(), "AD")
+    else:
+        sap_age_lov_value = art.get("sap_age_lov_value", "")
+        sap_age_lov_id    = art.get("sap_age_lov_id", "")
+        if not sap_age_lov_value:
+            # fallback to hardcoded LOV_AGE from gender
+            age_code          = art["age_code"]
+            sap_age_lov_value = LOV_AGE.get(age_code, age_code)
+            sap_age_lov_id    = age_code
+            
     _w("AT_SAPAge", sap_age_lov_value, id_val=sap_age_lov_id)
 
     by_age_val = LOV_BY_AGE.get(art["age_code"], "Adult")
@@ -1378,7 +1397,8 @@ def _add_generic_values(
 
 
     # AT_PrincipalAgeDescription is NA in attribute file
-    # _w("AT_PrincipalAgeDescription", art["age_raw"] or age_code)
+    if art.get("age_group"):
+        _w("AT_PrincipalAgeDescription", art["age_group"])
 
     # ── Season ───────────────────────────────────────────────────
     sea_raw   = art.get("season", "")
@@ -1404,7 +1424,19 @@ def _add_generic_values(
 
     # ── Article Type & BCI ───────────────────────────────────────
     _w("AT_BYArticleType", "License", id_val="License")
-    _w("AT_BCI", "", id_val="COMMERCIAL")
+    
+    bci_val = art.get("bci") or "COMMERCIAL"
+    _w("AT_BCI", "", id_val=bci_val)
+
+    # ── Merchandise Hierarchy ────────────────────────────────────
+    if art.get("division_col"):
+        _w("AT_PrincipalMerchandiseHierarchyL1", art["division_col"])
+    if art.get("md_category"):
+        _w("AT_PrincipalMerchandiseHierarchyL2", art["md_category"])
+
+    # ── Incoming Month ───────────────────────────────────────────
+    if art.get("eta_date"):
+        _w("AT_IncomingMonth", _fmt_date(art["eta_date"]))
 
     # ── System indicators ────────────────────────────────────────
     _w("AT_SAPProductFlag", "A",  id_val="A")
@@ -1603,12 +1635,13 @@ def build_product_xml(
 
 def _process_article(row_tuple):
     """Thread worker: map + validate one LOTTO row."""
-    row, brand_code, mdd_loader, season, country_code, md_mapping, brand_type, brand_category, mdd_currency = row_tuple
+    row, brand_code, mdd_loader, season, country_code, md_mapping, brand_type, brand_category, brand_group, mdd_currency = row_tuple
     mapped = map_article_ellesse(row, brand_code=brand_code)
     mapped["season"]         = season
     mapped["country_code"]   = country_code
     mapped["brand_type"]     = brand_type
     mapped["brand_category"] = brand_category
+    mapped["brand_group"]    = brand_group
     mapped["mdd_currency"]   = mdd_currency
     # ── Resolve Gender via Lotto MD Mapping → MDD Gender LOV ───
     if md_mapping and mdd_loader:
@@ -1761,10 +1794,11 @@ def run(args, auditor=None):
 
     _brand_type     = _rna_result.get("brand_type",     "")
     _brand_category = _rna_result.get("brand_category", "")
+    _brand_group    = _rna_result.get("brand_group",    "")
 
     log.info(
-        "[RNA] country=%s  brand_type='%s'  brand_category='%s'",
-        _country_name, _brand_type, _brand_category,
+        "[RNA] country=%s  brand_type='%s'  brand_category='%s' brand_group='%s'",
+        _country_name, _brand_type, _brand_category, _brand_group,
     )
 
     # ── Load retail currency MDD ─────────────────────────────────
@@ -1801,7 +1835,7 @@ def run(args, auditor=None):
         # ── Pass 1: parallel map + validate ─────────────────────
         num_workers = min(8, max(1, total_rows))
         task_args   = [
-            (row, brand_lov_id, mdd, args.season, file_country_code, md_map, _brand_type, _brand_category, currency_mdd)
+            (row, brand_lov_id, mdd, args.season, file_country_code, md_map, _brand_type, _brand_category, _brand_group, currency_mdd)
             for row in rows
         ]
         ordered: list[tuple[int, dict, list]] = []

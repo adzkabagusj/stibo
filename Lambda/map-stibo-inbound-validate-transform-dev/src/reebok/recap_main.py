@@ -1161,17 +1161,17 @@ def _resolve_retail_price_currency(country_code: str, mdd: dict | None = None) -
 
 
 def _fmt_date(v) -> str:
-    """Format a date to dd-Mon-YYYY lowercase."""
+    """Format a date to DD-MM-YYYY."""
     if isinstance(v, datetime):
-        return v.strftime("%d-%b-%Y").lower()
+        return v.strftime("%d-%m-%Y")
     if hasattr(v, "strftime"):
-        return v.strftime("%d-%b-%Y").lower()
+        return v.strftime("%d-%m-%Y")
     raw = _s(v)
     if not raw:
         return raw
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d.%m.%Y"):
         try:
-            return datetime.strptime(raw, fmt).strftime("%d-%b-%Y").lower()
+            return datetime.strptime(raw, fmt).strftime("%d-%m-%Y")
         except (ValueError, TypeError):
             pass
     return raw
@@ -1264,6 +1264,10 @@ def map_article_reebok(recap_row: dict, brand_code: str = "REE") -> dict:
     fob_raw      = _s(recap_row.get("FOB Price") or recap_row.get("Final FOB") or recap_row.get("Target Fob") or "")
     currency_raw = _s(recap_row.get("FOB Currency") or recap_row.get("Currency") or recap_row.get("FOB (USD)") or "")
     season       = _s(recap_row.get("Season") or "")
+    age_group    = _s(recap_row.get("Age Group") or "")
+    image        = _s(recap_row.get("Image") or "")
+    bci          = _s(recap_row.get("Manual Input") or recap_row.get("BCI") or "COMMERCIAL")
+    eta_date     = _s(recap_row.get("ETA DATE") or "")
 
     # ── Derived fields ──────────────────────────────────────────
     # SAP Gender
@@ -1434,6 +1438,12 @@ def map_article_reebok(recap_row: dict, brand_code: str = "REE") -> dict:
         # Derived codes
         "generic_code":      generic_code,
         "season_raw":        season,
+
+        # New fields
+        "age_group":         age_group,
+        "image":             image,
+        "bci":               bci,
+        "eta_date":          eta_date,
     }
 
 
@@ -1549,10 +1559,9 @@ def _add_generic_values(
     _w("AT_BrandGroup", id_val=brand_name.upper())
 
     # ── Principal identifiers ────────────────────────────────────
-    _w("AT_PrincipalStyleCode",  art["article_no"])
+    _w("AT_PrincipalStyleCode",  art["generic_code"])
     _w("AT_PrincipalColorName",  art["colour"])
     _w("AT_PrincipalColorCode",  art["colour_code"])
-    # _w("AT_SAPStyleCode",        art["sap_style_code"])
     
     # AT_PrincipalSize → Size range
     if art.get("size_range"):
@@ -1569,9 +1578,8 @@ def _add_generic_values(
         if colour_id.isdigit():
             colour_id = colour_id.zfill(3)
         _w("AT_Color", id_val=colour_id)
-    # else:
-    #     _w("AT_Color", value=art["colour"].upper())
-    # else: skip AT_Color — invalid to send raw color name as LOV value
+    else:
+        _w("AT_Color", id_val=art["colour_token"])
 
 
     # AT_InboundGenericCode — same formula as KEY_InboundArticle
@@ -1580,7 +1588,6 @@ def _add_generic_values(
     _w("AT_InboundGenericCode", at_generic_val)
 
     # ── Gender ───────────────────────────────────────────────────
-    # AT_Gender: col G → col I → MDD Gender LOV
     g_lov_value = art.get("gender_lov_value", "")
     g_lov_id    = art.get("gender_lov_id", "")
     if not g_lov_value:
@@ -1588,11 +1595,10 @@ def _add_generic_values(
         g_lov_id = g_code
     _w("AT_Gender", g_lov_value, id_val=g_lov_id)
 
-    # AT_BYGender: col G → col K → MDD Gender LOV
     by_lov_value = art.get("by_gender_lov_value", "")
     by_lov_id    = art.get("by_gender_lov_id", "")
     if not by_lov_value:
-        by_lov_value = g_lov_value   # fallback to SAP Gender value
+        by_lov_value = g_lov_value
         by_lov_id    = g_lov_id
     _w("AT_BYGender", by_lov_value, id_val=by_lov_id)
 
@@ -1600,29 +1606,34 @@ def _add_generic_values(
     _w("AT_PrincipalGenderCode", art.get("gender_code_raw", ""))
 
     # ── Age ──────────────────────────────────────────────────────
-    # AT_SAPAge: col G → col H → MDD Age LOV (col A → col B)
-    sap_age_lov_value = art.get("sap_age_lov_value", "")
-    sap_age_lov_id    = art.get("sap_age_lov_id", "")
-    if not sap_age_lov_value:
-        # fallback to hardcoded LOV_AGE
-        age_code          = art["age_code"]
-        sap_age_lov_value = LOV_AGE.get(age_code, age_code)
-        sap_age_lov_id    = age_code
-    _w("AT_SAPAge", sap_age_lov_value, id_val=sap_age_lov_id)
+    age_group_val = art.get("age_group")
+    if age_group_val:
+        sap_age_lov_value = age_group_val.title()
+        reverse_lov_age = {v.upper(): k for k, v in LOV_AGE.items()}
+        sap_age_lov_id = reverse_lov_age.get(sap_age_lov_value.upper(), "AD")
+        
+        # Use LOV_BY_AGE to get the correct STIBO display name and ID
+        by_age_lov_value = LOV_BY_AGE.get(age_group_val.upper(), age_group_val.title())
+        by_age_lov_id = by_age_lov_value.upper()
+    else:
+        sap_age_lov_value = art.get("sap_age_lov_value", "")
+        sap_age_lov_id    = art.get("sap_age_lov_id", "")
+        if not sap_age_lov_value:
+            age_code          = art["age_code"]
+            sap_age_lov_value = LOV_AGE.get(age_code, age_code)
+            sap_age_lov_id    = age_code
 
-    by_age_val = LOV_BY_AGE.get(art["age_code"], "Adult")
-    # AT_BYAge: col G → col J → MDD Age LOV (col G=display → col F=id)
-    by_age_lov_value = art.get("by_age_lov_value", "")
-    by_age_lov_id    = art.get("by_age_lov_id", "")
-    if not by_age_lov_value:
-        # fallback to hardcoded LOV_BY_AGE
-        by_age_lov_value = LOV_BY_AGE.get(art["age_code"], "Adult")
-        by_age_lov_id    = by_age_lov_value.upper()
+        by_age_lov_value = art.get("by_age_lov_value", "")
+        by_age_lov_id    = art.get("by_age_lov_id", "")
+        if not by_age_lov_value:
+            by_age_lov_value = LOV_BY_AGE.get(art["age_code"], "Adult")
+            by_age_lov_id    = by_age_lov_value.upper()
+
+    _w("AT_SAPAge", sap_age_lov_value, id_val=sap_age_lov_id)
     _w("AT_BYAge", by_age_lov_value, id_val=by_age_lov_id)
 
-
-    # AT_PrincipalAgeDescription is NA in attribute file
-    # _w("AT_PrincipalAgeDescription", art["age_raw"] or age_code)
+    if age_group_val:
+        _w("AT_PrincipalAgeDescription", age_group_val)
 
     # ── Season ───────────────────────────────────────────────────
     sea_raw   = art.get("season", "")
@@ -1638,17 +1649,46 @@ def _add_generic_values(
         season_year = year_match.group()
     _w("AT_SeasonYear", season_year)
 
-    # ── Country of Origin ────────────────────────────────────────
-    # coo_code, coo_label = _lov(art["coo"], LOV_COUNTRY_ORIGIN, art["coo"])
-    # _w("AT_CountryOrigin", coo_label, id_val=coo_code)
-
     # ── Article Category ─────────────────────────────────────────
-    # Generic (1) for Licensed recap with size variants
     _w("AT_SAPArticleCategory", id_val=art.get("art_category", "1"))
+
+    # ── Merchandise Hierarchy ────────────────────────────────────
+    if art.get("division_col"):
+        _w("AT_PrincipalMerchandiseHierarchyL1", art["division_col"])
+    if art.get("category"):
+        _w("AT_PrincipalMerchandiseHierarchyL2", art["category"])
+        
+    # ── Thumbnail Image ──────────────────────────────────────────
+    if art.get("image"):
+        _w("AT_ThumbnailImage", art["image"])
 
     # ── Article Type & BCI ───────────────────────────────────────
     _w("AT_BYArticleType", "License", id_val="License")
-    _w("AT_BCI", "", id_val="COMMERCIAL")
+    bci_val = art.get("bci") or "COMMERCIAL"
+    _w("AT_BCI", "", id_val=bci_val)
+    
+    # ── Incoming Month ───────────────────────────────────────────
+    if art.get("eta_date"):
+        _w("AT_IncomingMonth", _fmt_date(art["eta_date"]))
+        
+    # ── Ecom Gender Description EN ───────────────────────────────
+    ecom_gender_desc = ""
+    gender_up = (art.get("gender_raw") or "").upper()
+    age_up = (art.get("age_group") or "").upper()
+    
+    if gender_up == "MEN" and age_up in ("KIDS", "CHILDREN"):
+        ecom_gender_desc = "Boys"
+    elif gender_up == "WOMEN" and age_up in ("KIDS", "CHILDREN"):
+        ecom_gender_desc = "Girls"
+    elif gender_up == "MALE":
+        ecom_gender_desc = "Men" if age_up == "ADULTS" else "Boys"
+    elif gender_up == "FEMALE":
+        ecom_gender_desc = "Women" if age_up == "ADULTS" else "Girls"
+    else:
+        ecom_gender_desc = art.get("gender_raw", "").title()
+        
+    if ecom_gender_desc:
+        _w("AT_EcomGenderDescriptionEN", ecom_gender_desc)
 
     # ── System indicators ────────────────────────────────────────
     _w("AT_SAPProductFlag", "A",  id_val="A")
@@ -1689,10 +1729,8 @@ def _add_generic_values(
     
     # ── Brand Type / Brand Category ───────────────────────────────
     _w("AT_BrandType",     art.get("brand_type",     ""))
-    # _w("AT_BrandCategory", art.get("brand_category", ""))
 
     # ── Sports Category EN ────────────────────────────────────────
-    # Only include if Division column says "footwear"
     division_col = (art.get("division_col") or "").strip().lower()
     if division_col == "footwear":
         sc_display = art.get("sports_cat_en", "")
@@ -1707,9 +1745,12 @@ def _add_generic_values(
                 _w("AT_SportsCategoryEN", id_val=sc_id)
 
     # ── Country Size ─────────────────────────────────────────────
-    # Only include if Division column says "footwear" (case-insensitive)
     if division_col == "footwear":
-        _w("AT_CountrySize", "", id_val="EU")
+        _w("AT_CountrySize", "", id_val="US")
+    elif division_col == "apparel":
+        _w("AT_CountrySize", "", id_val="Asia")
+    else:
+        _w("AT_CountrySize", "", id_val="Manual Input")
 
     # ── UOM (Unit of Measure) ────────────────────────────────────
     uom_code = "EA"

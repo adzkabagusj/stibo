@@ -872,8 +872,8 @@ def run(args, auditor=None):
         # "_ExcelRow" in GTMFootwearLineListLoader / "excel_row" in map_sku),
         # NOT list position — safe even if blank rows exist elsewhere in the
         # sheet, since positional slicing would shift after row-dropping.
-        TEST_ROWS = {833, 844}
-        mapped_skus = [m for m in mapped_skus if m.get("excel_row") in TEST_ROWS]
+        # TEST_ROWS = {833, 844}
+        # mapped_skus = [m for m in mapped_skus if m.get("excel_row") in TEST_ROWS]
         # log.info(
         #     "[GTM-FW][TEST LIMIT] Restricted to Excel rows %s → %d SKU(s) matched",
         #     sorted(TEST_ROWS), len(mapped_skus),

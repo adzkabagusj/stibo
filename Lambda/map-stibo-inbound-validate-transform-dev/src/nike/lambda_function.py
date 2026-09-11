@@ -263,7 +263,8 @@ def _extract_principal(key: str) -> str | None:
 
 
 def _list_principal_files(bucket: str, principal: str,
-                          exclude_types: set = None) -> dict[str, dict]:
+                          exclude_types: set = None,
+                          triggered_filename: str = None) -> dict[str, dict]:
     exclude_types = exclude_types or set()
     prefix        = f"raw/metadata/{principal}/"
     paginator     = s3.get_paginator("list_objects_v2")
@@ -285,9 +286,16 @@ def _list_principal_files(bucket: str, principal: str,
                 found[ftype] = {"key": key, "filename": filename, "last_modified": last_modified}
                 log.info("  Classified  %-12s ← %s  [brand-specific]", ftype, filename)
 
+    # Nike 360 files keep using the NEW Brand Mapping file (NIK 360 tab);
+    # everything else (rookie, SP27 MAA, order confirmation) uses the V6
+    # Attributes List — same "some triggers stay on NEW mapping" carve-out
+    # pattern as new_balance/lambda_function.py's _NB_NEW_MAPPING_TRIGGER_TYPES.
+    _is_nike_360   = bool(triggered_filename) and "360" in triggered_filename.lower()
+    _attr_principal = None if _is_nike_360 else "nike"
     add_root_metadata_files(
         s3_client=s3, bucket=bucket, found=found,
-        include_types=ROOT_TYPES, exclude_types=exclude_types, log=log,
+        include_types=ROOT_TYPES, exclude_types=exclude_types,
+        principal=_attr_principal, log=log,
     )
 
     for page in paginator.paginate(Bucket=bucket, Prefix="raw/metadata/", Delimiter="/"):
@@ -596,6 +604,7 @@ def lambda_handler(event, context, auditor: AuditLogger = None):
     found = _list_principal_files(
         bucket, principal,
         exclude_types={triggered_file_type} if triggered_file_type else set(),
+        triggered_filename=Path(key).name,
     )
 
     trigger_filename = Path(key).name

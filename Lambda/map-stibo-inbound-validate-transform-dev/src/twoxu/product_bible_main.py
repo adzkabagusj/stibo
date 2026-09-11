@@ -36,7 +36,7 @@ Mapping (from Attributes List_complete_v6 — 2XU tab):
   AT_PrincipalMerchandiseHierarchyL1 ← Hierarchy
   AT_PrincipalMerchandiseHierarchyL2 ← Field of Play
   AT_PrincipalMerchandiseHierarchyL3 ← Category
-  AT_SportsCategoryEN                ← Field of Play → MDD "Sports Category" LOV direct lookup (id_val = LOV ID)
+  AT_SportsCategoryEN                ← (Hierarchy + Field of Play) → SAP Mapping (col A+B → col H "Sports Category") → MDD "Sports Category" LOV (id_val = LOV ID)
   AT_Collection1                 ← Product Name
   AT_Collection2                 → Story (not sent — no mapping logic in attribute sheet)
   AT_EComProductNameEN           ← Brand + Product Name + SAP Gender + SAP Product Category (SAP Color excluded — no mapping yet)
@@ -149,6 +149,32 @@ TWOXU_HIERARCHY_TO_DIVISION: dict[str, str] = {
     "COMPRESSION": "A",
     "SPECIALISED": "A",
     "ACCESSORIES": "E",
+}
+
+# (Hierarchy, Field of Play) → Sports Category, hardcoded from
+# "2XU - Stibo Mapping (upd. 21 April 2026).xlsx" → sheet "SAP Mapping"
+# (col A "Hierarchy" + col B "Field Of Play" → col H "Sports Category").
+# The resolved value is then looked up in the MDD "Sports Category" LOV for id_val.
+# Where a (Hierarchy, Field of Play) pair produced more than one Sports Category
+# in the sheet (driven by Category col D), the dominant value is used — raw
+# sheet counts are shown in the trailing comment.
+TWOXU_HIER_FOP_TO_SPORTS_CATEGORY: dict[tuple[str, str], str] = {
+    ("ACCESSORIES", "RECOVERY"):    "Running",   # {'Running': 3}
+    ("ACCESSORIES", "RUN"):         "Running",   # {'Running': 8, 'Others Accessories': 2}
+    ("ACCESSORIES", "SPORTSWEAR"):  "Fitness",   # {'Running': 1, 'Fitness': 2, 'Others Accessories': 1}
+    ("ACCESSORIES", "SWIM"):        "Swimming",  # {'Swimming': 2}
+    ("ACCESSORIES", "TEAM SPORTS"): "Running",   # {'Running': 1}
+    ("ACCESSORIES", "TRAIN"):       "Fitness",   # {'Running': 1, 'Fitness': 4, 'Others Accessories': 1}
+    ("ACCESSORIES", "TRIATHLON"):   "Running",   # {'Running': 2}
+    ("APPAREL", "RUN"):             "Running",   # {'Running': 15}
+    ("APPAREL", "SPORTSWEAR"):      "Fitness",   # {'Fitness': 23, 'Others Apparel': 2}
+    ("APPAREL", "TRAIN"):           "Fitness",   # {'Fitness': 11}
+    ("COMPRESSION", "RECOVERY"):    "Running",   # {'Running': 4}
+    ("COMPRESSION", "RUN"):         "Running",   # {'Running': 6}
+    ("COMPRESSION", "TEAM SPORTS"): "Running",   # {'Running': 10}
+    ("COMPRESSION", "TRAIN"):       "Fitness",   # {'Fitness': 6}
+    ("SPECIALISED", "SWIM"):        "Swimming",  # {'Swimming': 6, 'Others Accessories': 2}
+    ("SPECIALISED", "TRIATHLON"):   "Running",   # {'Running': 9}
 }
 
 TWOXU_COUNTRY_TO_PRICE: dict[str, tuple[str, str]] = {
@@ -1339,21 +1365,42 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None):
     if art["category"]:
         _w("AT_PrincipalMerchandiseHierarchyL3", art["category"])
 
-    # ── Sports Category EN — direct MDD LOV lookup from Field of Play ──
-    _fop_raw = (art.get("field_of_play") or "").strip()
-    if _fop_raw:
+    # ── Sports Category EN — (Hierarchy, Field of Play) → SAP Mapping → MDD LOV ──
+    # 1. Hierarchy + Field of Play (source columns)
+    # 2. Map to Sports Category via TWOXU_HIER_FOP_TO_SPORTS_CATEGORY
+    #    (hardcoded from "2XU - Stibo Mapping (upd. 21 April 2026).xlsx" → "SAP Mapping",
+    #     col A "Hierarchy" + col B "Field Of Play" → col H "Sports Category")
+    # 3. Look that value up in the MDD "Sports Category" LOV for the id_val
+    _hier_raw = (art.get("hierarchy") or "").strip()
+    _fop_raw  = (art.get("field_of_play") or "").strip()
+    _sc_source = None
+    if _hier_raw and _fop_raw:
+        _sc_source = TWOXU_HIER_FOP_TO_SPORTS_CATEGORY.get(
+            (_hier_raw.upper(), _fop_raw.upper())
+        )
+        if not _sc_source:
+            log.warning(
+                "[SportsCategoryEN] No SAP Mapping row for (Hierarchy '%s', Field of Play '%s') "
+                "— skipping attribute",
+                _hier_raw, _fop_raw,
+            )
+    if _sc_source:
         _sc_lov = mdd.lovs.get("Sports Category", {}) if mdd else {}
         # MDD sheet: {id_str: display_name} → invert to {display_name.upper(): id_str}
         _sc_by_name = {v.strip().upper(): k for k, v in _sc_lov.items()}
-        _sc_id      = _sc_by_name.get(_fop_raw.upper())
+        _sc_id      = _sc_by_name.get(_sc_source.upper())
         # Resolve display name from LOV (preserves original casing from MDD)
-        _sc_label   = _sc_lov.get(_sc_id, _fop_raw) if _sc_id else None
+        _sc_label   = _sc_lov.get(_sc_id, _sc_source) if _sc_id else None
         if _sc_id and _sc_label:
+            # LOV IDs are 2-digit (01..16); pad single digits e.g. 7 -> 07
+            if _sc_id.isdigit():
+                _sc_id = _sc_id.zfill(2)
             _w("AT_SportsCategoryEN", _sc_label, id_val=_sc_id)
         else:
             log.warning(
-                "[SportsCategoryEN] No MDD LOV match for Field of Play '%s' — skipping attribute",
-                _fop_raw,
+                "[SportsCategoryEN] No MDD LOV match for Sports Category '%s' "
+                "(from Hierarchy '%s' / Field of Play '%s') — skipping attribute",
+                _sc_source, _hier_raw, _fop_raw,
             )
 
     # ── Collections ──────────────────────────────────────────────

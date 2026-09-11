@@ -936,7 +936,7 @@ def run(args, auditor=None):
 
         # TEST LIMIT: uncomment the line below and set the first/last row numbers
         # (1-based, inclusive — row 1 = first data row). e.g. 10, 20 → rows 10-20 only.
-        START_ROW, END_ROW = 100, 101; mapped_skus = mapped_skus[START_ROW - 1:END_ROW]
+        # START_ROW, END_ROW = 100, 101; mapped_skus = mapped_skus[START_ROW - 1:END_ROW]
 
         # Guard the one deviation: KEY_InboundArticle must stay 1:1 with rows.
         keys  = [m["generic_code"] for m in mapped_skus if m.get("item_number")]

@@ -1272,9 +1272,9 @@ def run(args, auditor=None):
 
         f.write("  <Products>\n")
 
-        all_generics = list(generics.values())[:5]
+        all_generics = list(generics.values())
         log.info(
-            "[SteveMadden-FootwearPO] Processing %d generics (limited to first 5)",
+            "[SteveMadden-FootwearPO] Processing %d generics",
             len(all_generics),
         )
 

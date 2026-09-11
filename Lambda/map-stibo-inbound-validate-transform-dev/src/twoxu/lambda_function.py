@@ -275,6 +275,7 @@ def _list_principal_files(bucket: str, principal: str,
         found=found,
         include_types=GLOBAL_TYPES,
         exclude_types=exclude_types,
+        principal="2xu",
         log=log,
     )
 

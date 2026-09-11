@@ -13,6 +13,34 @@ ROOT_METADATA_PATTERNS = {
     ],
 }
 
+# Brands that must use the legacy Attributes List v6 file.
+# All other brands will use the latest NEW Brand Mapping file.
+# "onr" and "2xu" are always-V6 (whole brand); "nike" is passed as the
+# principal only for non-360 Nike files — Nike 360 keeps using the NEW
+# Brand Mapping file (NIK 360 tab) — see nike/lambda_function.py.
+# NOTE: Lotto was NOT added here — every Lotto ETL module that actually
+# reads the attributes file (orderform_main.py / pricelist_main.py's RNA
+# lookup, recap_main.py's AttributesListLoader) hardcodes the NEW mapping
+# file's name/sheet ("NEW - Brand mapping files Template.xlsx" /
+# "Lotto(Inline + Licensed)"), so switching Lotto to V6 here would silently
+# empty out AT_BrandType/AT_BrandCategory (and recap's whole attribute map)
+# rather than fail loudly. Flagged back to the user — see chat.
+V6_BRANDS: set[str] = {
+    "adidas", "new_balance", "smiggle", "aldo", "diadora",
+    "onr", "2xu", "nike",
+}
+
+# Attribute patterns for v6 brands (matches Attributes List_complete_v6_*.xlsx)
+_ATTR_PATTERNS_V6: list[str] = [
+    "attributes list", "attribute list", "attributes_list", "attributes_complete",
+]
+
+# Attribute patterns for all other brands (matches NEW - Brand mapping files Template.xlsx)
+_ATTR_PATTERNS_NEW_MAPPING: list[str] = [
+    "brand mapping", "brand_mapping",
+    "mapping files template", "mapping template", "brand template",
+]
+
 # Backward compatibility for router.py
 ROOT_METADATA_KEYS = {
     "mdd": "Master Data Dictionary (MAA).xlsx",
@@ -43,6 +71,7 @@ def add_root_metadata_files(
     found: dict,
     include_types: Optional[set[str]] = None,
     exclude_types: Optional[set[str]] = None,
+    principal: Optional[str] = None,
     log=None,
 ) -> None:
     """
@@ -51,11 +80,33 @@ def add_root_metadata_files(
     Brand-specific files already present in found keep priority. This lets a
     brand override a support file while allowing root-level shared MDD and
     Attributes List files to replace the old raw/metadata/ location.
-    
+
     Scans bucket root for files matching patterns and picks the latest based on LastModified.
+
+    For brands in V6_BRANDS (adidas, new_balance, smiggle, aldo, diadora) the legacy
+    Attributes List v6 file is selected. All other brands use the latest NEW Brand Mapping file.
     """
     include_types = include_types or set(ROOT_METADATA_PATTERNS.keys())
     exclude_types = exclude_types or set()
+
+    # Determine which attribute file pattern to use for this brand
+    _principal_norm = (principal or "").lower().replace(" ", "_").replace("-", "_")
+    _attr_patterns = (
+        _ATTR_PATTERNS_V6 if _principal_norm in V6_BRANDS else _ATTR_PATTERNS_NEW_MAPPING
+    )
+
+    # Build effective patterns per type, overriding attributes based on brand group
+    _effective_patterns = {
+        ftype: (_attr_patterns if ftype == "attributes" else patterns)
+        for ftype, patterns in ROOT_METADATA_PATTERNS.items()
+    }
+
+    if log:
+        log.info(
+            "  [AttrFile] brand='%s' → using %s attribute patterns",
+            principal or "unknown",
+            "v6" if _principal_norm in V6_BRANDS else "new-brand-mapping",
+        )
 
     # List all objects at bucket root (non-recursive)
     try:
@@ -71,8 +122,8 @@ def add_root_metadata_files(
                 if not filename.endswith((".xlsx", ".xlsb", ".csv")):
                     continue
                 
-                # Match against patterns
-                for ftype, patterns in ROOT_METADATA_PATTERNS.items():
+                # Match against effective patterns
+                for ftype, patterns in _effective_patterns.items():
                     if ftype not in include_types or ftype in exclude_types:
                         continue
                     

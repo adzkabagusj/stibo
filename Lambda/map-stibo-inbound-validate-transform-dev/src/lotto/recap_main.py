@@ -1,41 +1,68 @@
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║      STIBO INBOUND XML GENERATOR — LOTTO Licensed Recap v1.1   ║
-║  Licensed Recap Sample Development → Stibo STEP XML            ║
+║      STIBO INBOUND XML GENERATOR — LOTTO Licensed Recap v2.0     ║
+║  Licensed Recap Sample Development → Stibo STEP XML              ║
 ╚══════════════════════════════════════════════════════════════════╝
-
-LOTTO Licensed Recap-specific workflow (similar to New Balance Licensed):
 
 Source file
   • Single input file  : "RECAP SAMPLE DEVELOPMENT-LOT-{SEASON}-FOOTWEAR.xlsx"
-  • Active sheet       : "LOTTO"
-  • Header row         : index 1 (0-based) → row 2 in Excel
-  • Data starts        : index 2 (0-based) → row 3 in Excel
-  • Filter             : All rows are Licensed recap samples
+  • Sheet              : "LOT" / "LOTTO" (first sheet as a last resort)
+  • Header row         : located by scoring rows against RECAP_COLUMNS
+  • Filter             : rows with a blank "Supp Art #" are dropped
 
-Column mapping (from RECAP SAMPLE DEVELOPMENT file):
-    Supp Art #          → AT_PrincipalStyleCode (supplier article number)
-    Color               → AT_PrincipalColorName / AT_PrincipalColorDescription
-    Color Code          → AT_PrincipalColorCode
-    Gender              → AT_Gender, AT_BYGender, AT_PrincipalGenderDescription
-    Code Category       → Product Division (F=Footwear, A=Apparel, E=Accessories)
-    Category            → (internal classification)
-    Size Range          → AT_PrincipalSize (comma-separated sizes → variants)
-    FOB Price           → AT_FOB
-    Currency            → AT_FOBCurrency
-    Supplier            → AT_MainVendorIdentification
-    Season              → AT_Season + AT_SeasonYear
-    
+Two ingestions, one Lambda
+──────────────────────────
+The same article reaches the MAP Portal twice:
+
+  1st ingestion  The principal's own recap.  Only the columns the principal
+                 fills are populated; the Lambda completes the rest from
+                 formulas and mapping tables.  The user then enriches the
+                 record in Smartsheet (Stibo) and in MDTools.
+  2nd ingestion  The completed recap exported back out of MDTools and
+                 re-uploaded.  Same layout, plus the finalised columns
+                 ("Updated Image", "Final FOB", "proposed_retail_price", …).
+
+detect_ingestion_phase() tells the two apart by looking for those
+2nd-ingestion-only columns; RECAP_COLUMNS then decides which column wins per
+field, always falling back to the other when a cell is blank.
+
+Column mapping (Lotto Mapping Issues and References.xlsx → "Mapping to STIBO")
+    Supp Art #      → AT_PrincipalStyleCode (mirrored to the generic code)
+    Age Group       → AT_PrincipalAgeDescription, AT_SAPAge, AT_BYAge
+    Gender          → AT_Gender, AT_BYGender, AT_PrincipalGenderDescription
+    Division        → AT_PrincipalMerchandiseHierarchyL1
+    MD Category     → AT_PrincipalMerchandiseHierarchyL2, AT_SportsCategoryEN
+    FOB Price       → AT_FOB          (2nd ingestion: Final FOB)
+    FOB Currency    → AT_FOBCurrency
+    ETA DATE        → AT_IncomingMonth
+    Image           → AT_ThumbnailImage (2nd ingestion: Updated Image)
+    BCI             → AT_BCI          (1st ingestion: Manual Input → not sent;
+                                        2nd ingestion: recap "BCI" column)
+    Color / Code    → AT_PrincipalColorName / AT_PrincipalColorCode
+    Size Range      → AT_PrincipalSize (2nd ingestion: ProductSize)
+    Season          → AT_Season + AT_SeasonYear
+
+Age & Gender come from sheet "BY Age & Gender":
+    Gender    Male/Men/Boys → Male · Female/Women/Girls → Female · Unisex
+    Age Group Adult→(Adults, Adult)  Kids→(Children, Kids)
+              All Ages→(All Ages, All Ages)  Infant→(Children, Infant)
+              Preschool→(Children, Preschool)
+              Grade School→(Children, Grade School)
+  SAP Age and BY Age are *different* value sets — "Children" is a SAP Age and
+  must never be sent as a BY Age.
+
+Every LOV attribute is written with an ID resolved by _lov_id() (MDD →
+documented code table → display value).  A <Value> carrying text but no ID is
+silently dropped by STIBO; that was the cause of the "Not Populated" results
+for SAP/BY Age, SAP/BY Gender and BCI in UAT.
+
 Article structure:
-  • Article Type   : always "License"  (Licensed recap samples)
+  • Article Type    : "License" (1st ingestion) or the recap "Article Type"
   • Article Category: Generic (1) — has size variants
   • Each row = one Generic (Supp Art # + Color Code combination)
-  • Variants       : derived by splitting "Size Range" into individual sizes
 
-Generic code  : LOT + Supp Art # + Color Code (max 12 chars)
-Variant code  : Generic + 3-char SAP color token + 3-char SAP size code
-
-One Generic per (Supp Art # + Color) row.
+Generic code : brand(3) + article-type(1) + season-year digit(1)
+               + code category(1) + last 4 of Supp Art # + gender(1) + colour(1)
 """
 from __future__ import annotations
 
@@ -80,6 +107,26 @@ log = logging.getLogger(__name__)
 
 
 # ══════════════════════════════════════════════════════════════════
+# NORMALISATION HELPERS
+# ══════════════════════════════════════════════════════════════════
+
+def _norm_key(v) -> str:
+    """Normalise any label / header / LOV display value to an A-Z0-9 key.
+
+    Recap workbooks and MDD sheets both suffer from cosmetic drift - trailing
+    spaces, embedded newlines ("FOB \nCurrency"), "#" vs "No.", "Grade School"
+    vs "GRADE-SCHOOL".  Comparing on this key removes that whole class of
+    "Not Populated" defects.
+    """
+    return re.sub(r"[^A-Z0-9]", "", str(v or "").upper())
+
+
+def _nkeyed(d: dict) -> dict:
+    """Re-key a lookup table by _norm_key so lookups ignore case/punctuation."""
+    return {_norm_key(k): v for k, v in d.items()}
+
+
+# ══════════════════════════════════════════════════════════════════
 # LOV TABLES
 # ══════════════════════════════════════════════════════════════════
 
@@ -93,13 +140,17 @@ LOV_AGE = {
     "AD": "Adults", "CH": "Children", "IN": "Infant",
     "AA": "All Ages", "JR": "Junior", "K": "Kids",
 }
-LOV_BY_AGE = {
+# BY Age is its own value set - "Children" is a *SAP* Age value and must never
+# be sent as a BY Age (sheet "BY Age & Gender", rows 20-25).
+LOV_BY_AGE = _nkeyed({
     "ADULT": "Adult", "ADULTS": "Adult", "AD": "Adult",
-    "JUNIOR": "Junior", "CH": "Children",
-    "CHILDREN": "Children", "CHILD": "Children",
-    "KIDS": "Kids", "K": "Kids",
+    "KIDS": "Kids", "KID": "Kids", "K": "Kids",
+    "CHILDREN": "Kids", "CHILD": "Kids", "CH": "Kids",
     "ALL AGES": "All Ages", "AA": "All Ages",
-}
+    "INFANT": "Infant", "IN": "Infant",
+    "PRESCHOOL": "Preschool",
+    "GRADE SCHOOL": "Grade School",
+})
 LOV_UOM = {"EA": "Each", "PR": "Pair", "SET": "Set", "PK": "Pack"}
 LOV_SAP_ARTICLE_CATEGORY = {"1": "Generic", "0": "Single", "10": "Sell set (Hampers)"}
 LOV_SEASON = {
@@ -159,33 +210,76 @@ def _parse_country_code_from_file_or_args(filename: str, cli_country: str = "") 
     return "ID"
 
 # ── LOTTO-specific lookup tables ───────────────────────────────
+#
+# Source of truth: "Lotto Mapping Issues and References.xlsx"
+#   • sheet "BY Age & Gender"  → recap Gender / Age Group → SAP + BY values
+#   • sheet "Mapping to STIBO" → per-attribute source column and LOV examples
+#   • sheet "UAT Result"       → the defects these tables exist to fix
+#
+# Each table maps a recap value to the pair of *display* values STIBO expects:
+# (SAP display, BY display).  LOV ids are resolved separately by _lov_id() so
+# the MDD stays authoritative and we never guess an id we could look up.
 
-# LOTTO Gender mapping to SAP Gender
-LOTTO_GENDER_TO_SAP: dict[str, str] = {
-    "MALE":   "M",
-    "FEMALE": "F",
-    "UNISEX": "U",
-    "BOY":    "M",
-    "GIRL":   "F",
-    "MEN":    "M",
-    "WOMEN":  "F",
-    "MENS":   "M",
-    "WOMENS": "F",
-}
+# recap "Gender" → (SAP Gender display, BY Gender display)
+LOTTO_GENDER_MAP: dict[str, tuple[str, str]] = _nkeyed({
+    "Male":    ("Male",   "Male"),
+    "Men":     ("Male",   "Male"),
+    "Mens":    ("Male",   "Male"),
+    "Men's":   ("Male",   "Male"),
+    "Boy":     ("Male",   "Male"),
+    "Boys":    ("Male",   "Male"),
+    "M":       ("Male",   "Male"),
+    "Female":   ("Female", "Female"),
+    "Women":    ("Female", "Female"),
+    "Womens":   ("Female", "Female"),
+    "Women's":  ("Female", "Female"),
+    "Girl":     ("Female", "Female"),
+    "Girls":    ("Female", "Female"),
+    "F":        ("Female", "Female"),
+    "W":        ("Female", "Female"),
+    "Unisex":  ("Unisex", "Unisex"),
+    "Uni":     ("Unisex", "Unisex"),
+    "U":       ("Unisex", "Unisex"),
+})
 
-# LOTTO Gender/Category to SAP Age
-LOTTO_GENDER_TO_AGE: dict[str, str] = {
-    "MALE":   "AD",   # Adults
-    "FEMALE": "AD",
-    "UNISEX": "AD",
-    "MEN":    "AD",
-    "WOMEN":  "AD",
-    "MENS":   "AD",
-    "WOMENS": "AD",
-    "BOY":    "CH",    # Kids
-    "GIRL":   "CH",
-    "KIDS":   "CH",
+# recap "Age Group" → (SAP Age display, BY Age display)
+LOTTO_AGE_GROUP_MAP: dict[str, tuple[str, str]] = _nkeyed({
+    "Adult":        ("Adults",   "Adult"),
+    "Adults":       ("Adults",   "Adult"),
+    "AD":           ("Adults",   "Adult"),
+    "Kids":         ("Children", "Kids"),
+    "Kid":          ("Children", "Kids"),
+    "Children":     ("Children", "Kids"),
+    "Child":        ("Children", "Kids"),
+    "CH":           ("Children", "Kids"),
+    "All Ages":     ("All Ages", "All Ages"),
+    "AA":           ("All Ages", "All Ages"),
+    "Infant":       ("Children", "Infant"),
+    "Preschool":    ("Children", "Preschool"),
+    "Pre School":   ("Children", "Preschool"),
+    "Grade School": ("Children", "Grade School"),
+})
+
+# Fallback only: recap Gender → Age Group, used when the recap carries no
+# "Age Group" column at all.  Anything not listed here is an Adult.
+LOTTO_GENDER_TO_AGE_GROUP: dict[str, str] = _nkeyed({
+    "Boy": "Kids", "Boys": "Kids", "Girl": "Kids", "Girls": "Kids",
+    "Kids": "Kids", "Kid": "Kids", "Children": "Kids",
+})
+
+# LOV ids documented in "Mapping to STIBO" rows 81-90.  BY Age / BY Gender / BCI
+# have no documented id list; for those _lov_id() falls back to the display
+# value itself - the convention the UAT "Result" column confirms for BCI
+# ("Commercial", *not* "COMMERCIAL").
+SAP_AGE_LOV_ID: dict[str, str] = {
+    "Adults": "AD", "Children": "CH", "All Ages": "AA",
+    "Infant": "IN", "Junior": "JR",
 }
+SAP_GENDER_LOV_ID: dict[str, str] = {"Male": "M", "Female": "F", "Unisex": "U"}
+
+# BCI has no 1st-ingestion default: "Mapping to STIBO" row 219 says
+# "1st ingestion : Manual Input", so the attribute is left blank until the
+# 2nd ingestion supplies the recap "BCI" column.
 
 # LOTTO Category/Code Category to Product Division
 LOTTO_CATEGORY_TO_DIVISION: dict[str, str] = {
@@ -258,22 +352,31 @@ LOTTO_MATERIAL_TYPE_LOV: dict[str, str] = {
 # Default Material Type for LOTTO Licensed
 LOTTO_DEFAULT_MATERIAL_TYPE = "ZINA"
 
-# ── Lotto Category → Sports Category EN display value ────────────
-LOV_SPORTS_CATEGORY_EN: dict[str, str] = {
-    "BADMINTON":    "Tennis / Padel",
-    "CASUAL":       "Lifestyle / Casual",
-    "FUTSAL":       "Soccer",
-    "HIKING":       "Outdoor / Trail / Hiking",
-    "KIDS":         "Lifestyle / Casual",
-    "LIFESTYLE":    "Lifestyle / Casual",
-    "OUTDOOR":      "Outdoor / Trail / Hiking",
-    "OUTDOOR SHOE": "Outdoor / Trail / Hiking",
-    "PADEL":        "Tennis / Padel",
-    "RUNNING":      "Running",
-    "SANDALS":      "Other",
-    "SOCCER":       "Soccer",
-    "TENNIS":       "Tennis / Padel",
-}
+# ── recap "MD Category" → Sports Category EN display value ───────
+# Licensed scope, Footwear only.  Values transcribed from "Mapping to STIBO"
+# rows 288-298 (Category = Sports category) plus the UAT Result rows 58-66 list.
+LOV_SPORTS_CATEGORY_EN: dict[str, str] = _nkeyed({
+    "Badminton":      "Tennis / Padel",
+    "Casual":         "Lifestyle / Casual",
+    "Court":          "Tennis / Padel",
+    "Court style":    "Lifestyle / Casual",
+    "Essential pack": "Lifestyle / Casual",
+    "Five-a-side":    "Soccer",
+    "Futsal":         "Soccer",
+    "Hiking":         "Outdoor / Trail / Hiking",
+    "Kids":           "Lifestyle / Casual",
+    "Lifestyle":      "Lifestyle / Casual",
+    "Outdoor":        "Outdoor / Trail / Hiking",
+    "Outdoor shoe":   "Outdoor / Trail / Hiking",
+    "Paddle":         "Tennis / Padel",
+    "Padel":          "Tennis / Padel",
+    "Performance":    "Tennis / Padel",
+    "Running":        "Running",
+    "Sandals":        "Other",
+    "Soccer":         "Soccer",
+    "Sport style":    "Lifestyle / Casual",
+    "Tennis":         "Tennis / Padel",
+})
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -704,6 +807,7 @@ class LottoRecapLoader:
         self.path  = path
         self.df    = pd.DataFrame()
         self.sheet = ""
+        self.phase = 1          # 1st or 2nd ingestion, set by _load()
         self._load()
 
     def _load(self):
@@ -722,32 +826,51 @@ class LottoRecapLoader:
         ws   = wb[target]
         rows = list(ws.iter_rows(values_only=True))
 
-        # Dynamically find header row (search for row containing key columns)
-        # Expected: Row 3 in Excel = index 2 in 0-based
-        hdr_idx = None
-        for i, row in enumerate(rows[:10]):  # Check first 10 rows
+        # Find the header row by scoring the first 10 rows against the columns
+        # we actually consume.  The old "first row containing any keyword" rule
+        # latched onto title/banner rows such as "RECAP SAMPLE DEVELOPMENT -
+        # FOOTWEAR CATEGORY", which shifted every column by one and left the
+        # documented mappings reading empty cells.
+        expected = {
+            _norm_key(name)
+            for second, first in RECAP_COLUMNS.values()
+            for name in (second + first)
+        }
+
+        best_idx, best_score = None, 0
+        for i, row in enumerate(rows[:10]):
             if not row:
                 continue
-            row_str = " ".join([str(c).upper() if c else "" for c in row])
-            # Look for key columns that indicate this is the header row
-            if any(kw in row_str for kw in ["SUPP ART", "COLOR", "GENDER", "CATEGORY", "SIZE RANGE"]):
-                hdr_idx = i
-                log.info("[Recap-LOTTO] Found header at row %d (0-indexed, row %d in Excel)", hdr_idx, hdr_idx + 1)
-                break
-        
-        if hdr_idx is None:
-            log.warning("[Recap-LOTTO] Could not find header row, defaulting to row 3 (index 2)")
+            score = sum(1 for c in row if c and _norm_key(c) in expected)
+            if score > best_score:
+                best_idx, best_score = i, score
+
+        if best_idx is None or best_score < 2:
+            log.warning(
+                "[Recap-LOTTO] No convincing header row found (best score %d) — "
+                "defaulting to row 3 (index 2)", best_score,
+            )
             hdr_idx = 2  # Row 3 in Excel
-        
+        else:
+            hdr_idx = best_idx
+            log.info(
+                "[Recap-LOTTO] Header at index %d (Excel row %d), matched %d known columns",
+                hdr_idx, hdr_idx + 1, best_score,
+            )
+
         header = [
             str(h).strip() if h else f"col_{i}"
             for i, h in enumerate(rows[hdr_idx])
         ]
-        
+
         log.info("[Recap-LOTTO] Header row %d: %s", hdr_idx, header)
-        
+
+        unknown = [h for h in rows[hdr_idx] if h and _norm_key(h) not in expected]
+        if unknown:
+            log.info("[Recap-LOTTO] Columns not consumed by this mapping: %s", unknown)
+
         df = pd.DataFrame(rows[hdr_idx + 1:], columns=header)
-        
+
         log.info("[Recap-LOTTO] Found columns: %s", list(df.columns))
         
         # Log first data row for debugging
@@ -784,8 +907,8 @@ class LottoRecapLoader:
         wb.close()
         self.df    = df.reset_index(drop=True)
         self.sheet = target
-        log.info("[Recap-LOTTO] %d rows loaded", len(self.df))
-
+        self.phase = detect_ingestion_phase(self.df.columns)
+        log.info("[Recap-LOTTO] %d rows loaded (ingestion %d)", len(self.df), self.phase)
 
 # ══════════════════════════════════════════════════════════════════
 # SECTION 2 — MAPPER
@@ -797,6 +920,211 @@ def _s(v) -> str:
         return ""
     s = str(v).strip()
     return "" if s in ("None", "nan", "0", "NaT") else s
+
+
+# ══════════════════════════════════════════════════════════════════
+# RECAP SOURCE COLUMNS — 1st vs 2nd ingestion
+# ══════════════════════════════════════════════════════════════════
+#
+# The same article is uploaded to the MAP Portal twice:
+#
+#   1st ingestion — the principal's own recap.  Only the columns the principal
+#                   fills are populated; the rest is completed later by the
+#                   user in Smartsheet and then in MDTools.
+#   2nd ingestion — the completed recap exported back out of MDTools.  It keeps
+#                   the original layout and *adds* the finalised columns
+#                   ("Updated Image", "Final FOB", "proposed_retail_price", …).
+#
+# One Lambda handles both: for every field we list the 2nd-ingestion column
+# names first and the 1st-ingestion ones second, then pick according to the
+# detected phase.  A blank cell always falls through to the other candidate, so
+# a partially-filled 2nd ingestion still keeps the principal's original value.
+#
+# Column names come from "Lotto Mapping Issues and References.xlsx" →
+# "Mapping to STIBO", column "Field Name in the Brand File".
+
+RECAP_COLUMNS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    #  field           2nd-ingestion columns                1st-ingestion columns
+    "supp_art":      ((),                                  ("Supp Art #", "Supp Art#", "Supplier Article", "Article")),
+    "style_desc":    (("Principal Style Description",),    ()),
+    "colour":        (("Updated Color", "Updated Colour"), ("Color", "Colour")),
+    "colour_code":   (("Updated Color Code",),             ("Color Code", "Colour Code")),
+    "gender":        ((),                                  ("Gender",)),
+    "gender_code":   ((),                                  ("Gender Code",)),
+    "age_group":     ((),                                  ("Age Group", "Age")),
+    "division":      ((),                                  ("Division",)),
+    "md_category":   ((),                                  ("MD Category", "Category")),
+    "code_category": ((),                                  ("Code Category",)),
+    "size_range":    ((),                                  ("Size Range",)),
+    "product_size":  (("ProductSize", "Product Size"),     ()),
+    "fob":           (("Final FOB",),                      ("FOB Price", "FOB")),
+    "fob_currency":  ((),                                  ("FOB Currency", "Currency")),
+    "landed_cost":   (("landed_cost", "Landed Cost"),      ()),
+    "retail_price":  (("proposed_retail_price", "Proposed Retail Price"), ()),
+    "price_range":   (("Price Range",),                    ()),
+    "image":         (("Updated Image",),                  ("Image", "Thumbnail Image")),
+    "bci":           (("BCI",),                            ()),
+    "eta_date":      ((),                                  ("ETA DATE", "ETA Date", "ETA")),
+    "article_type":  (("Article Type",),                   ()),
+    "supplier":      (("Vendor Code",),                    ("Supplier", "Vendor")),
+    "coo":           (("Country of Origin",),              ()),
+    "noa":           (("NOA", "Nature of Article"),        ()),
+    "merch_hier":    (("Merchandise Hierarchy",),          ()),
+    "season":        ((),                                  ("Season",)),
+    "outsole":       ((),                                  ("Outsole Material",)),
+    "upper":         ((),                                  ("Upper Material",)),
+}
+
+# Columns that only ever exist in a 2nd ingestion — their presence is what
+# tells the two uploads apart.
+SECOND_INGESTION_MARKERS: tuple[str, ...] = tuple(
+    name for second, _first in RECAP_COLUMNS.values() for name in second
+)
+
+
+def detect_ingestion_phase(columns) -> int:
+    """Return 1 or 2 for the ingestion this recap workbook represents."""
+    present = {_norm_key(c) for c in columns}
+    hits = sorted({m for m in SECOND_INGESTION_MARKERS if _norm_key(m) in present})
+    phase = 2 if hits else 1
+    log.info(
+        "[Recap-LOTTO] Ingestion phase %d — 2nd-ingestion columns present: %s",
+        phase, ", ".join(hits) if hits else "none",
+    )
+    return phase
+
+
+class RecapRow:
+    """Header-insensitive, ingestion-aware accessor over one recap row.
+
+    Recap headers drift between seasons and between the principal's file and
+    the MDTools export — trailing spaces, embedded newlines ("FOB \nCurrency"),
+    "Supp Art #" vs "Supp Art#", upper vs title case.  Every one of those turned
+    a documented mapping into a "Not Populated" defect in UAT (rows 7-18), so
+    lookups go through _norm_key() instead of exact dict keys.
+    """
+
+    def __init__(self, row, phase: int = 1):
+        self.phase = phase
+        self._cells: dict[str, object] = {}
+        for k, v in row.items():
+            nk = _norm_key(k)
+            if nk and nk not in self._cells:
+                self._cells[nk] = v
+
+    def raw(self, field: str):
+        """First non-empty cell among the candidates for *field*, or None."""
+        second, first = RECAP_COLUMNS.get(field, ((), (field,)))
+        names = (second + first) if self.phase >= 2 else (first + second)
+        for name in names:
+            v = self._cells.get(_norm_key(name))
+            if v is None:
+                continue
+            if str(v).strip() in ("", "None", "nan", "NaT"):
+                continue
+            return v
+        return None
+
+    def get(self, field: str) -> str:
+        """Cleaned string value for *field* ('' when absent or blank)."""
+        return _s(self.raw(field))
+
+    def has_column(self, field: str) -> bool:
+        second, first = RECAP_COLUMNS.get(field, ((), (field,)))
+        return any(_norm_key(n) in self._cells for n in (second + first))
+
+
+# ══════════════════════════════════════════════════════════════════
+# LOV RESOLUTION
+# ══════════════════════════════════════════════════════════════════
+
+def _lov_id(mdd, lov_names, display: str, fallback: dict | None = None) -> str:
+    """Resolve a LOV *display* value to the id STIBO expects.
+
+    Order: the MDD LOV sheets, then the code table documented in
+    "Mapping to STIBO", then the display value itself.
+
+    Never returns "" for a non-empty display.  ``_val`` writes an element with
+    either an ``ID`` or text — and STIBO silently drops a LOV attribute that
+    arrives as bare text.  That is precisely why SAP Age, BY Age, SAP Gender and
+    BY Gender all came back "Not Populated" in UAT: the MDD lookup missed, the
+    display value was still truthy, and the fallback branch was skipped.
+    """
+    disp = (display or "").strip()
+    if not disp:
+        return ""
+
+    if mdd is not None:
+        want = _norm_key(disp)
+        for lov_name in lov_names:
+            for value_name, value_id in (mdd.lovs.get(lov_name) or {}).items():
+                if _norm_key(value_name) == want and str(value_id).strip():
+                    return str(value_id).strip()
+
+    if fallback:
+        for k, v in fallback.items():
+            if _norm_key(k) == _norm_key(disp):
+                return v
+
+    return disp
+
+
+_CURRENCY_ALIASES = _nkeyed({
+    "US$": "USD", "$": "USD", "USD$": "USD", "US Dollar": "USD", "US Dollars": "USD",
+    "Rp": "IDR", "RMB": "CNY", "Euro": "EUR",
+})
+
+
+def _norm_currency(raw: str) -> str:
+    """Normalise a recap FOB currency cell to a 3-letter ISO LOV id."""
+    v = (raw or "").strip()
+    if not v:
+        return ""
+    alias = _CURRENCY_ALIASES.get(_norm_key(v))
+    if alias:
+        return alias
+    m = re.search(r"\b([A-Za-z]{3})\b", v)
+    if m:
+        return m.group(1).upper()
+    return re.sub(r"[^A-Z]", "", v.upper())[:3]
+
+
+def _resolve_gender_age(mapped: dict, md_mapping=None) -> None:
+    """Fill the four SAP/BY Gender + Age display values on *mapped*.
+
+    Priority is the brand-mapping workbook ("Lotto MD Mapping" tab) when it has
+    a row for the value, then the tables transcribed from the "BY Age & Gender"
+    sheet.  Gender drives Gender; the recap "Age Group" column drives Age, and
+    only when that column is absent does Gender stand in for it.
+    """
+    gender_raw = mapped.get("gender_raw", "")
+    age_raw    = mapped.get("age_group", "")
+
+    sap_g, by_g = LOTTO_GENDER_MAP.get(_norm_key(gender_raw), ("", ""))
+    if md_mapping is not None:
+        sap_g = md_mapping.get_lov_value(gender_raw) or sap_g
+        by_g  = md_mapping.get_by_gender_lov_value(gender_raw) or by_g
+    if not sap_g and gender_raw:
+        sap_g = gender_raw.strip().title()
+    if not by_g:
+        by_g = sap_g
+
+    age_key = age_raw or LOTTO_GENDER_TO_AGE_GROUP.get(_norm_key(gender_raw), "Adult")
+    sap_a, by_a = LOTTO_AGE_GROUP_MAP.get(_norm_key(age_key), ("", ""))
+    if md_mapping is not None:
+        sap_a = (md_mapping.get_sap_age_lov_value(age_key)
+                 or md_mapping.get_sap_age_lov_value(gender_raw) or sap_a)
+        by_a  = (md_mapping.get_by_age_lov_value(age_key)
+                 or md_mapping.get_by_age_lov_value(gender_raw) or by_a)
+    if not sap_a:
+        sap_a = "Adults"
+    if not by_a:
+        by_a = LOV_BY_AGE.get(_norm_key(sap_a), sap_a)
+
+    mapped["sap_gender_display"] = sap_g
+    mapped["by_gender_display"]  = by_g
+    mapped["sap_age_display"]    = sap_a
+    mapped["by_age_display"]     = by_a
 
 
 def _find_currency_mdd_source_file() -> Path | None:
@@ -916,17 +1244,17 @@ def _resolve_retail_price_currency(country_code: str, mdd: dict | None = None) -
 
 
 def _fmt_date(v) -> str:
-    """Format a date to dd-Mon-YYYY lowercase."""
+    """Format a date to DD-MM-YYYY (used by AT_IncomingMonth)."""
     if isinstance(v, datetime):
-        return v.strftime("%d-%b-%Y").lower()
+        return v.strftime("%d-%m-%Y")
     if hasattr(v, "strftime"):
-        return v.strftime("%d-%b-%Y").lower()
+        return v.strftime("%d-%m-%Y")
     raw = _s(v)
     if not raw:
         return raw
     for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d.%m.%Y"):
         try:
-            return datetime.strptime(raw, fmt).strftime("%d-%b-%Y").lower()
+            return datetime.strptime(raw, fmt).strftime("%d-%m-%Y")
         except (ValueError, TypeError):
             pass
     return raw
@@ -978,61 +1306,72 @@ def _parse_season(season: str) -> tuple[str, str]:
     return s[:2], ""
 
 
-def map_article_lotto(recap_row: dict, brand_code: str = "LOT") -> dict:
-    """
-    Map one LOTTO recap row → unified article dict (similar to NB Licensed pattern).
+def map_article_lotto(recap_row, brand_code: str = "LOT", phase: int = 1) -> dict:
+    """Map one LOTTO recap row -> unified article dict.
 
-    Key mappings (from RECAP SAMPLE DEVELOPMENT file):
-      - article_no          = Supp Art #
-      - sap_style_code      = Supp Art # (same as article_no for supplier items)
-      - color               = Color column
-      - color_code          = Color Code column (if present)
-      - gender_code         = from Gender column → SAP Gender (M/F/U)
-      - age_code            = derived from Gender (KIDS→CH, others→AD)
-      - div_letter          = from Code Category or Category column
-      - art_category        = "1" (Generic - has size variants)
-      - category            = Category column (OUTDOOR, CASUAL, KIDS, etc.)
-      - outsole_material    = Outsole Material column
-      - upper_material      = Upper Material column
-      - fob                 = FOB Price column
-      - currency            = Currency column
-      - supplier            = Supplier column
-      - season              = Season column (e.g., SS26)
-      - size_range          = Size Range column (comma-separated sizes)
-      - sizes_list          = parsed list of individual sizes
-      - article_type        = "License" (licensed recap samples)
+    ``phase`` is the ingestion (1 or 2) as returned by detect_ingestion_phase();
+    it decides which source column wins for the fields that differ between the
+    principal's upload and the MDTools export — see RECAP_COLUMNS.
+
+    Source columns (Mapping to STIBO, "Field Name in the Brand File"):
+      Supp Art #    -> AT_PrincipalStyleCode  (mirrored to the generic code)
+      Age Group     -> AT_PrincipalAgeDescription, AT_SAPAge, AT_BYAge
+      Gender        -> AT_Gender, AT_BYGender, AT_PrincipalGenderDescription
+      Division      -> AT_PrincipalMerchandiseHierarchyL1
+      MD Category   -> AT_PrincipalMerchandiseHierarchyL2, AT_SportsCategoryEN
+      FOB Currency  -> AT_FOBCurrency
+      ETA DATE      -> AT_IncomingMonth
+      Image         -> AT_ThumbnailImage   (2nd ingestion: Updated Image)
+      BCI           -> AT_BCI              (1st ingestion: default Commercial)
     """
+    row = recap_row if isinstance(recap_row, RecapRow) else RecapRow(recap_row, phase)
+
     # ── Extract raw values from row ──────────────────────────────
-    supp_art        = _s(recap_row.get("Supp Art #"))
-    color           = _s(recap_row.get("Color"))
-    color_code      = _s(recap_row.get("Color Code") or "")
-    gender          = _s(recap_row.get("Gender"))
-    gender_code_raw = _s(recap_row.get("Gender code") or recap_row.get("Gender Code") or "")
-    code_category   = _s(recap_row.get("Code Category") or "")
-    article_type_raw = _s(recap_row.get("Article Type") or "")
-    category     = _s(recap_row.get("Category"))
-    division_col = _s(recap_row.get("Division") or "")  # Read Division column from Excel
-    size_range   = _s(recap_row.get("Size Range"))
-    outsole      = _s(recap_row.get("Outsole \nMaterial") or recap_row.get("Outsole Material") or "")
-    upper        = _s(recap_row.get("Upper \nMaterial") or recap_row.get("Upper Material") or "")
-    supplier     = _s(recap_row.get("Supplier"))
-    fob_raw      = _s(recap_row.get("FOB Price"))
-    currency_raw = _s(recap_row.get("Currency"))
-    season       = _s(recap_row.get("Season"))
+    supp_art         = row.get("supp_art")
+    color            = row.get("colour")
+    color_code       = row.get("colour_code")
+    gender           = row.get("gender")
+    gender_code_raw  = row.get("gender_code")
+    code_category    = row.get("code_category")
+    article_type_raw = row.get("article_type")
+    md_category      = row.get("md_category")
+    division_col     = row.get("division")
+    size_range       = row.get("size_range")
+    outsole          = row.get("outsole")
+    upper            = row.get("upper")
+    supplier         = row.get("supplier")
+    fob_raw          = row.get("fob")
+    currency_raw     = row.get("fob_currency")
+    season           = row.get("season")
+    age_group        = row.get("age_group")
+    image            = row.get("image")
+    bci              = row.get("bci")
+    eta_date         = row.raw("eta_date")
 
     # ── Derived fields ──────────────────────────────────────────
-    # SAP Gender
-    gender_code = LOTTO_GENDER_TO_SAP.get(gender.upper(), "U")
+    # Legacy single-char SAP codes, still used to build the generic code.
+    sap_gender_display = LOTTO_GENDER_MAP.get(_norm_key(gender), ("", ""))[0]
+    gender_code = SAP_GENDER_LOV_ID.get(sap_gender_display, "U")
 
-    # SAP Age
-    age_code = LOTTO_GENDER_TO_AGE.get(gender.upper(), "AD")
+    age_key  = age_group or LOTTO_GENDER_TO_AGE_GROUP.get(_norm_key(gender), "Adult")
+    sap_age_display = LOTTO_AGE_GROUP_MAP.get(_norm_key(age_key), ("Adults", ""))[0]
+    age_code = SAP_AGE_LOV_ID.get(sap_age_display, "AD")
 
-    # Division: prefer Code Category, fallback to Category
-    div_source = code_category if code_category else category
-    div_letter = LOTTO_CATEGORY_TO_DIVISION.get(div_source.upper(), "F")
+    # Division: prefer the explicit "Code Category", then "Division",
+    # then "MD Category".
+    div_source = code_category or division_col or md_category
+    # PPH parent still falls back to Footwear, as it always has.
+    div_letter = LOTTO_CATEGORY_TO_DIVISION.get(div_source.strip().upper(), "") or "F"
 
-    # Article Type (always Licensed for recap samples)
-    by_art_type = "License"
+    # Footwear gates AT_SportsCategoryEN and AT_CountrySize, so it needs
+    # positive evidence — never the "F" default that div_letter carries.
+    is_footwear = (
+        _norm_key(division_col) in ("FOOTWEAR", "FW")
+        or _norm_key(code_category) in ("FOOTWEAR", "FW", "F")
+    )
+
+    # Article Type — 1st ingestion has no column and defaults to Licensed.
+    by_art_type = article_type_raw or "License"
 
     # FOB: extract numeric value
     def _extract_price(v: str) -> str:
@@ -1043,26 +1382,27 @@ def map_article_lotto(recap_row: dict, brand_code: str = "LOT") -> dict:
 
     fob_str = _extract_price(fob_raw)
 
-    # Currency
-    currency = currency_raw.upper() if currency_raw else ""
+    # FOB Currency -> 3-letter ISO id (UAT Result rows 7-9: "Not Populated")
+    currency = _norm_currency(currency_raw)
 
-    # Country of Origin - default CN (can be added to Excel file later)
-    coo = "CN"
+    # Country of Origin — manual input on the 1st ingestion, a column on the
+    # 2nd.  CN stays the default the portal has always used.
+    coo = row.get("coo") or "CN"
 
     # Generate model name (AI-generated format per attributes list)
     # Example: "LOTTO FH240429 MALE BLACK"
     model_name = f"LOTTO {supp_art} {gender.upper()} {color.upper()}".strip()
 
-    # ── New InboundGenericCode formula ─────────────────────────────
+    # ── InboundGenericCode formula ────────────────────────────────
     # 3-char Brand Code + 1-char Article Type + 1-digit Year
-    # + 1-char Code Category + last 4 chars Supp Art # 
+    # + 1-char Code Category + last 4 chars Supp Art #
     # + 1-char Gender Code + 1-char Color Code  (total = 12)
 
     # Article Type (1 char)
-    art_type_char = LOTTO_ARTICLE_TYPE_CODE.get(article_type_raw.upper(), "R")
+    art_type_char = LOTTO_ARTICLE_TYPE_CODE.get(by_art_type.upper(), "R")
 
     # Season year digit — last digit of the 2-digit year in season token
-    # e.g. SS26 → "6", FW27 → "7"
+    # e.g. SS26 -> "6", FW27 -> "7"
     _season_match = re.match(r"^[A-Z]{1,2}(\d{2,4})$", season.upper())
     season_year_digit = _season_match.group(1)[-1] if _season_match else ""
 
@@ -1073,8 +1413,9 @@ def map_article_lotto(recap_row: dict, brand_code: str = "LOT") -> dict:
     supp_art_alnum = re.sub(r"[^A-Z0-9]", "", supp_art.upper())
     supp_art_last4 = supp_art_alnum[-4:].rjust(4, "0") if supp_art_alnum else "0000"
 
-    # Gender Code (1 char)
-    gender_char = re.sub(r"[^A-Z0-9]", "", gender_code_raw.upper())[:1]
+    # Gender Code (1 char) — fall back to the derived SAP gender when the recap
+    # has no "Gender Code" column, so the code keeps its 12-char shape.
+    gender_char = re.sub(r"[^A-Z0-9]", "", (gender_code_raw or gender_code).upper())[:1]
 
     # Color Code (1 char)
     color_char = re.sub(r"[^A-Z0-9]", "", color_code.upper())[:1]
@@ -1095,18 +1436,18 @@ def map_article_lotto(recap_row: dict, brand_code: str = "LOT") -> dict:
     # Colour token (3-char SAP token for variants)
     colour_token = color_code_clean.ljust(3, "X")
 
-    # Variant code base (will be extended with size code)
-    # variant_code = generic_code + colour_token + size_code (3 chars)
-
-    # Parse sizes into a list of dicts with size and sap_size_code
+    # Parse sizes into a list of dicts with size and sap_size_code.
+    # 1st ingestion: the "Size Range" column.  2nd ingestion: "ProductSize"
+    # carries the finalised per-article size instead.
     sizes_list: list[dict] = []
-    if size_range:
+    size_source = row.get("product_size") or size_range
+    if size_source:
         # Handle different separators: comma, hyphen, etc.
         # Examples: "36-40", "36, 37, 38", "S/M/L"
         raw_sizes = []
-        if "-" in size_range and "," not in size_range:
+        if "-" in size_source and "," not in size_source:
             # Range format like "36-40"
-            parts = size_range.split("-")
+            parts = size_source.split("-")
             if len(parts) == 2:
                 try:
                     start = int(parts[0].strip())
@@ -1114,19 +1455,19 @@ def map_article_lotto(recap_row: dict, brand_code: str = "LOT") -> dict:
                     raw_sizes = [str(i) for i in range(start, end + 1)]
                 except ValueError:
                     # Not numeric range, treat as single size
-                    raw_sizes = [size_range.strip()]
+                    raw_sizes = [size_source.strip()]
         else:
             # Comma or slash separated
             separators = [",", "/", ";"]
-            raw = size_range
+            raw = size_source
             for sep in separators:
                 if sep in raw:
                     raw_sizes = [s.strip() for s in raw.split(sep) if s.strip()]
                     break
             if not raw_sizes:
                 # Single size
-                raw_sizes = [size_range.strip()]
-        
+                raw_sizes = [size_source.strip()]
+
         # Convert raw sizes to dicts with SAP size codes
         for size in raw_sizes:
             sap_code = _size_to_sap_code(size)
@@ -1138,9 +1479,10 @@ def map_article_lotto(recap_row: dict, brand_code: str = "LOT") -> dict:
     return {
         # Core identifiers
         "article_no":        supp_art,
-        "sap_style_code":    supp_art,           # Supplier article number
+        "sap_style_code":    generic_code[3:],  # generic without the brand code
         "model_name":        model_name,
         "brand_code":        brand_code,
+        "style_desc":        row.get("style_desc"),
 
         # Colour
         "colour":            color,
@@ -1152,15 +1494,18 @@ def map_article_lotto(recap_row: dict, brand_code: str = "LOT") -> dict:
         "gender_code_raw":   gender_code_raw,
         "gender_raw":        gender,
         "age_code":          age_code,
+        "age_group":         age_group,          # Age Group column (drives SAP/BY Age)
 
         # Classification
-        "division":          category,           # raw category for hierarchy
-        "division_col":      division_col,       # Division column from Excel
+        "division":          md_category,        # raw category for hierarchy
+        "division_col":      division_col,       # Division column   -> PMH L1
+        "md_category":       md_category,        # MD Category column -> PMH L2
         "code_category":     code_category,      # raw code category
         "div_letter":        div_letter,         # SAP division letter
-        "category":          category,           # OUTDOOR, CASUAL, KIDS, etc.
+        "category":          md_category,        # kept for backwards compat
+        "is_footwear":       is_footwear,
         "sub_category":      "",
-        "sports_cat_en":     LOV_SPORTS_CATEGORY_EN.get((category or "").strip().upper(), ""),
+        "sports_cat_en":     LOV_SPORTS_CATEGORY_EN.get(_norm_key(md_category), ""),
 
         # Commercial
         "article_type":      by_art_type,        # License
@@ -1168,6 +1513,8 @@ def map_article_lotto(recap_row: dict, brand_code: str = "LOT") -> dict:
         "collection1":       "",
         "collection2":       "",
         "franchise":         "Licensed",
+        "noa":               row.get("noa"),
+        "merch_hier":        row.get("merch_hier"),
 
         # Materials
         "outsole_material":  outsole,
@@ -1176,7 +1523,9 @@ def map_article_lotto(recap_row: dict, brand_code: str = "LOT") -> dict:
         # Pricing
         "fob":               fob_str,
         "currency":          currency,
-        "rrp":               "",
+        "rrp":               _extract_price(row.get("retail_price")),
+        "landed_cost":       _extract_price(row.get("landed_cost")),
+        "price_range":       row.get("price_range"),
 
         # Origin / Supplier
         "coo":               coo,
@@ -1186,9 +1535,15 @@ def map_article_lotto(recap_row: dict, brand_code: str = "LOT") -> dict:
         "size_range":        size_range,
         "sizes_list":        sizes_list,
 
+        # BY / image / schedule
+        "image":             image,              # Image column      -> AT_ThumbnailImage
+        "bci":               bci,                # BCI column        -> AT_BCI
+        "eta_date":          eta_date,           # ETA DATE column   -> AT_IncomingMonth
+
         # Derived codes
         "generic_code":      generic_code,
         "season_raw":        season,
+        "ingestion_phase":   row.phase,
     }
 
 
@@ -1196,15 +1551,17 @@ def map_article_lotto(recap_row: dict, brand_code: str = "LOT") -> dict:
 # SECTION 3 — VALIDATOR
 # ══════════════════════════════════════════════════════════════════
 
-def validate(mapped: dict, mdd: MDDLoader) -> list[str]:
+def validate(mapped: dict, mdd: MDDLoader | None) -> list[str]:
     """Validate mandatory MDD attributes against the mapped article dict."""
     warns = []
     art   = mapped["article_no"]
+    if mdd is None:
+        return warns
     field_checks = {
-        "article_no":   "AT_PrincipalStyleCode",
-        "gender_code":  "AT_Gender",
-        "age_code":     "AT_SAPAge",
-        "brand_code":   "AT_Brand",
+        "article_no":         "AT_PrincipalStyleCode",
+        "sap_gender_display": "AT_Gender",
+        "sap_age_display":    "AT_SAPAge",
+        "brand_code":         "AT_Brand",
     }
     for field, at_id in field_checks.items():
         meta = mdd.attributes.get(at_id, {})
@@ -1304,10 +1661,14 @@ def _add_generic_values(
     _w("AT_BrandGroup", id_val=brand_name.upper())
 
     # ── Principal identifiers ────────────────────────────────────
-    _w("AT_PrincipalStyleCode",  art["article_no"])
+    # UAT Result rows 2-4: "Revise -> Mirror to generic" — AT_PrincipalStyleCode
+    # carries the generic code, not the raw "Supp Art #".
+    _w("AT_PrincipalStyleCode",  art["generic_code"])
     _w("AT_PrincipalColorName",  art["colour"])
     _w("AT_PrincipalColorCode",  art["colour_code"])
-    # _w("AT_SAPStyleCode",        art["sap_style_code"])
+    _w("AT_SAPStyleCode",        art["sap_style_code"])
+    if art.get("style_desc"):
+        _w("AT_PrincipalStyleDescription", art["style_desc"])
     
     # AT_PrincipalSize → Size range
     if art.get("size_range"):
@@ -1333,51 +1694,48 @@ def _add_generic_values(
     at_generic_val = art["generic_code"]
     art["at_generic_val"] = at_generic_val
     _w("AT_InboundGenericCode", at_generic_val)
+    _w("AT_Generic", at_generic_val)
 
-    # ── Gender ───────────────────────────────────────────────────
-    # AT_Gender: col G → col I → MDD Gender LOV
-    g_lov_value = art.get("gender_lov_value", "")
-    g_lov_id    = art.get("gender_lov_id", "")
-    if not g_lov_value:
-        g_code, g_lov_value = _lov(art["gender_code"], LOV_GENDER, art["gender_code"])
-        g_lov_id = g_code
-    _w("AT_Gender", g_lov_value, id_val=g_lov_id)
+    # ── Gender (UAT Result rows 36-51: "Not Populated") ──────────
+    # Source: recap "Gender"; mapping table: sheet "BY Age & Gender".
+    # Both attributes are LOVs, so they must always carry an ID — a <Value>
+    # with text but no ID is dropped by STIBO, which is what "Not Populated"
+    # meant here.  _lov_id() guarantees a non-empty id.
+    sap_gender = art.get("sap_gender_display", "")
+    by_gender  = art.get("by_gender_display", "")
 
-    # AT_BYGender: col G → col K → MDD Gender LOV
-    by_lov_value = art.get("by_gender_lov_value", "")
-    by_lov_id    = art.get("by_gender_lov_id", "")
-    if not by_lov_value:
-        by_lov_value = g_lov_value   # fallback to SAP Gender value
-        by_lov_id    = g_lov_id
-    _w("AT_BYGender", by_lov_value, id_val=by_lov_id)
+    if sap_gender:
+        _w("AT_Gender", sap_gender,
+           id_val=_lov_id(mdd, ("GenderLOV", "Gender", "SAP Gender"),
+                          sap_gender, SAP_GENDER_LOV_ID))
+    if by_gender:
+        _w("AT_BYGender", by_gender,
+           id_val=_lov_id(mdd, ("BYGenderLOV", "BY Gender", "GenderLOV", "Gender"),
+                          by_gender))
 
     _w("AT_PrincipalGenderDescription", art["gender_raw"])
-    _w("AT_PrincipalGenderCode", art.get("gender_code_raw", ""))
+    if art.get("gender_code_raw"):
+        _w("AT_PrincipalGenderCode", art["gender_code_raw"])
 
-    # ── Age ──────────────────────────────────────────────────────
-    # AT_SAPAge: col G → col H → MDD Age LOV (col A → col B)
-    sap_age_lov_value = art.get("sap_age_lov_value", "")
-    sap_age_lov_id    = art.get("sap_age_lov_id", "")
-    if not sap_age_lov_value:
-        # fallback to hardcoded LOV_AGE
-        age_code          = art["age_code"]
-        sap_age_lov_value = LOV_AGE.get(age_code, age_code)
-        sap_age_lov_id    = age_code
-    _w("AT_SAPAge", sap_age_lov_value, id_val=sap_age_lov_id)
+    # ── Age (UAT Result rows 19-35: "Not Populated") ─────────────
+    # Source: recap "Age Group" (Mapping to STIBO rows 81 / 210); the Gender
+    # column only stands in when the recap has no Age Group at all.
+    sap_age = art.get("sap_age_display", "")
+    by_age  = art.get("by_age_display", "")
 
-    by_age_val = LOV_BY_AGE.get(art["age_code"], "Adult")
-    # AT_BYAge: col G → col J → MDD Age LOV (col G=display → col F=id)
-    by_age_lov_value = art.get("by_age_lov_value", "")
-    by_age_lov_id    = art.get("by_age_lov_id", "")
-    if not by_age_lov_value:
-        # fallback to hardcoded LOV_BY_AGE
-        by_age_lov_value = LOV_BY_AGE.get(art["age_code"], "Adult")
-        by_age_lov_id    = by_age_lov_value.upper()
-    _w("AT_BYAge", by_age_lov_value, id_val=by_age_lov_id)
+    if sap_age:
+        _w("AT_SAPAge", sap_age,
+           id_val=_lov_id(mdd, ("AgeLOV", "Age", "SAP Age"), sap_age, SAP_AGE_LOV_ID))
+    if by_age:
+        _w("AT_BYAge", by_age,
+           id_val=_lov_id(mdd, ("ByAgeLOV", "BY Age", "AgeLOV"), by_age))
 
-
-    # AT_PrincipalAgeDescription is NA in attribute file
-    # _w("AT_PrincipalAgeDescription", art["age_raw"] or age_code)
+    # AT_PrincipalAgeDescription — UAT Result rows 5-6 ask for it mirrored onto
+    # the generic, so it is written for every article: the raw "Age Group" when
+    # the recap has one, otherwise the value the Age mapping resolved to.
+    age_description = art.get("age_group") or by_age
+    if age_description:
+        _w("AT_PrincipalAgeDescription", age_description)
 
     # ── Season ───────────────────────────────────────────────────
     sea_raw   = art.get("season", "")
@@ -1401,9 +1759,37 @@ def _add_generic_values(
     # Generic (1) for Licensed recap with size variants
     _w("AT_SAPArticleCategory", id_val=art.get("art_category", "1"))
 
-    # ── Article Type & BCI ───────────────────────────────────────
-    _w("AT_BYArticleType", "License", id_val="License")
-    _w("AT_BCI", "", id_val="COMMERCIAL")
+    # ── Merchandise Hierarchy (UAT Result rows 10-13) ────────────
+    # L1 → recap "Division", L2 → recap "MD Category".
+    if art.get("division_col"):
+        _w("AT_PrincipalMerchandiseHierarchyL1", art["division_col"])
+    if art.get("md_category"):
+        _w("AT_PrincipalMerchandiseHierarchyL2", art["md_category"])
+
+    # ── Thumbnail Image (UAT Result rows 14-15) ──────────────────
+    # 1st ingestion: "Image"; 2nd ingestion: "Updated Image".
+    if art.get("image"):
+        _w("AT_ThumbnailImage", art["image"])
+
+    # ── Incoming Month → recap "ETA DATE" (UAT Result row 18) ────
+    if art.get("eta_date"):
+        incoming_month = _fmt_date(art["eta_date"])
+        if incoming_month:
+            _w("AT_IncomingMonth", incoming_month)
+
+    # ── Article Type & BCI (UAT Result rows 16-17) ───────────────
+    # 1st ingestion defaults to Licensed; the 2nd carries an "Article Type"
+    # column.
+    art_type = art.get("article_type") or "License"
+    _w("AT_BYArticleType", art_type, id_val=art_type)
+
+    # BCI — "Mapping to STIBO" row 219: 1st ingestion = Manual Input (the user
+    # fills it in Smartsheet later), 2nd ingestion = recap "BCI" column.  So
+    # nothing is sent unless the recap actually carries a BCI value; no
+    # default is invented on the 1st ingestion.
+    bci_display = art.get("bci")
+    if bci_display:
+        _w("AT_BCI", bci_display, id_val=_lov_id(mdd, ("BCI", "BCILOV"), bci_display))
 
     # ── System indicators ────────────────────────────────────────
     _w("AT_SAPProductFlag", "A",  id_val="A")
@@ -1413,9 +1799,13 @@ def _add_generic_values(
     if fob_value:
         _w("AT_FOB", fob_value)
     
+    # AT_FOBCurrency — recap "FOB Currency", normalised to a 3-letter ISO id
+    # (UAT Result rows 7-9: "Not Populated").
     currency_value = art.get("currency")
     if currency_value:
-        _w("AT_FOBCurrency", currency_value, id_val=currency_value)
+        _w("AT_FOBCurrency", currency_value,
+           id_val=_lov_id(mdd, ("FOB Currency", "FOBCurrency", "Currency"),
+                          currency_value))
     
     rpc_id = _resolve_retail_price_currency(art.get("country_code", ""), art.get("mdd_currency"))
     if rpc_id:
@@ -1446,24 +1836,28 @@ def _add_generic_values(
     _w("AT_BrandType",     art.get("brand_type",     ""))
     # _w("AT_BrandCategory", art.get("brand_category", ""))
 
-    # ── Sports Category EN ────────────────────────────────────────
-    # Only include if Division column says "footwear"
-    division_col = (art.get("division_col") or "").strip().lower()
-    if division_col == "footwear":
+    # ── Sports Category EN (UAT Result rows 52-75) ───────────────
+    # Licensed scope is Footwear only; the source is the recap "MD Category"
+    # column (UAT rows 73-74), mapped through LOV_SPORTS_CATEGORY_EN.
+    if art.get("is_footwear"):
         sc_display = art.get("sports_cat_en", "")
-        if sc_display and mdd:
-            sc_lov    = mdd.lovs.get("Sports Category", {})
-            sc_id_raw = sc_lov.get(sc_display, "")
-            if sc_id_raw:
-                try:
-                    sc_id = str(int(sc_id_raw)).zfill(2)
-                except (ValueError, TypeError):
-                    sc_id = str(sc_id_raw).strip()
-                _w("AT_SportsCategoryEN", id_val=sc_id)
+        if sc_display:
+            sc_id = _lov_id(
+                mdd,
+                ("Sports Category", "Sports Category EN", "SportsCategoryLOV"),
+                sc_display,
+            )
+            if sc_id != sc_display and sc_id.isdigit():
+                sc_id = sc_id.zfill(2)
+            _w("AT_SportsCategoryEN", sc_display, id_val=sc_id)
+        elif art.get("md_category"):
+            log.warning(
+                "[SportsCategory] No mapping for MD Category %r (article %s)",
+                art.get("md_category"), art.get("article_no"),
+            )
 
-    # ── Country Size ─────────────────────────────────────────────
-    # Only include if Division column says "footwear" (case-insensitive)
-    if division_col == "footwear":
+    # ── Country Size — default EUR for Footwear (Mapping row 307) ─
+    if art.get("is_footwear"):
         _w("AT_CountrySize", "", id_val="EU")
 
     # ── UOM (Unit of Measure) ────────────────────────────────────
@@ -1489,7 +1883,9 @@ def _add_variant_values(
     # ── KEY_Variant defining attributes (required for key resolution) ──
     b_code  = art.get("brand_code", "LOT")
     _w("AT_Brand",       id_val=b_code)
-    _w("AT_PrincipalStyleCode", art["sap_style_code"])
+    # Mirror to generic here as well, so a variant key resolves to the same
+    # style code the Generic carries (UAT Result rows 2-4).
+    _w("AT_PrincipalStyleCode", art["generic_code"])
     _w("AT_Size",               sap_size_code,         id_val=sap_size_code)
 
     # ── Size attributes ────────────────────────────────────────
@@ -1602,46 +1998,28 @@ def build_product_xml(
 
 def _process_article(row_tuple):
     """Thread worker: map + validate one LOTTO row."""
-    row, brand_code, mdd_loader, season, country_code, md_mapping, brand_type, brand_category, mdd_currency = row_tuple
-    mapped = map_article_lotto(row, brand_code=brand_code)
+    (row, brand_code, mdd_loader, season, country_code, md_mapping,
+     brand_type, brand_category, mdd_currency, phase) = row_tuple
+
+    mapped = map_article_lotto(row, brand_code=brand_code, phase=phase)
     mapped["season"]         = season
     mapped["country_code"]   = country_code
     mapped["brand_type"]     = brand_type
     mapped["brand_category"] = brand_category
     mapped["mdd_currency"]   = mdd_currency
-    # ── Resolve Gender via Lotto MD Mapping → MDD Gender LOV ───
-    if md_mapping and mdd_loader:
-        raw_gender = mapped.get("gender_raw", "")
-        gender_lov = mdd_loader.lovs.get("GenderLOV", {})
 
-        # AT_Gender: col G → col I → MDD Gender LOV
-        sap_lov_value             = md_mapping.get_lov_value(raw_gender)
-        mapped["gender_lov_value"] = sap_lov_value
-        mapped["gender_lov_id"]    = gender_lov.get(sap_lov_value, "")
+    # SAP / BY Gender + Age display values.  The brand-mapping workbook wins
+    # when it has a row; otherwise the "BY Age & Gender" tables do.  LOV ids
+    # are resolved later, in _add_generic_values, against the MDD.
+    _resolve_gender_age(mapped, md_mapping)
 
-        # AT_BYGender: col G → col K → MDD Gender LOV
-        by_lov_value                 = md_mapping.get_by_gender_lov_value(raw_gender)
-        mapped["by_gender_lov_value"] = by_lov_value
-        mapped["by_gender_lov_id"]    = gender_lov.get(by_lov_value, "")
+    log.debug(
+        "[Gender/Age] gender=%r age_group=%r → SAP %s / %s   BY %s / %s",
+        mapped.get("gender_raw"), mapped.get("age_group"),
+        mapped["sap_gender_display"], mapped["sap_age_display"],
+        mapped["by_gender_display"],  mapped["by_age_display"],
+    )
 
-        # AT_SAPAge: col G → col H → MDD Age LOV (col A → col B)
-        age_lov      = mdd_loader.lovs.get("AgeLOV", {})
-        sap_age_disp = md_mapping.get_sap_age_lov_value(raw_gender)  # e.g. "Children"
-        mapped["sap_age_lov_value"] = sap_age_disp
-        mapped["sap_age_lov_id"]    = age_lov.get(sap_age_disp, "")  # e.g. "CH"
-
-        # AT_BYAge: col G → col J → MDD Age LOV (col G=display → col F=id)
-        by_age_lov   = mdd_loader.lovs.get("ByAgeLOV", {})
-        by_age_disp  = md_mapping.get_by_age_lov_value(raw_gender)   # e.g. "Kids"
-        mapped["by_age_lov_value"] = by_age_disp
-        mapped["by_age_lov_id"]    = by_age_lov.get(by_age_disp, "") # e.g. "KIDS"
-
-        log.debug("[Gender] raw='%s' → SAP='%s'(%s)  BY='%s'(%s)  SAPAge='%s'(%s)  BYAge='%s'(%s)",
-                  raw_gender,
-                  sap_lov_value, mapped["gender_lov_id"],
-                  by_lov_value,  mapped["by_gender_lov_id"],
-                  sap_age_disp,  mapped["sap_age_lov_id"],
-                  by_age_disp,   mapped["by_age_lov_id"])
     warns = validate(mapped, mdd_loader)
     return mapped, warns
 
@@ -1677,14 +2055,14 @@ def run(args, auditor=None):
         # Search for all matching files (exact name or keyword matches)
         keywords = ["brand mapping", "brand_mapping", "mapping template", "brand template"]
         matches = []
-        
+
         for file in d.glob("*.xlsx"):
             filename_lower = file.name.lower()
             # Match if it's the exact name OR contains keywords
             if file.name == "NEW - Brand mapping files Template.xlsx" or \
                any(kw in filename_lower for kw in keywords):
                 matches.append(file)
-        
+
         if not matches:
             return None
         
@@ -1722,6 +2100,22 @@ def run(args, auditor=None):
     log.info("════════════════════════════════════════════════════")
 
     mdd    = MDDLoader(mdd_f)
+
+    # The 13 attributes COE reported as failing for Lotto (UAT Result sheet).
+    # If one is missing from the MDD it can never be populated no matter what
+    # we send, so surface that up front instead of debugging it per article.
+    _uat_attrs = [
+        "AT_PrincipalStyleCode", "AT_PrincipalAgeDescription", "AT_FOBCurrency",
+        "AT_PrincipalMerchandiseHierarchyL1", "AT_PrincipalMerchandiseHierarchyL2",
+        "AT_ThumbnailImage", "AT_BCI", "AT_IncomingMonth", "AT_SAPAge",
+        "AT_BYAge", "AT_BYGender", "AT_Gender", "AT_SportsCategoryEN", "AT_UOM",
+    ]
+    _unknown = [a for a in _uat_attrs if a not in mdd.attributes]
+    if _unknown:
+        log.warning("[MDD] UAT attributes not present in the MDD: %s", ", ".join(_unknown))
+    else:
+        log.info("[MDD] All %d UAT attributes present in the MDD.", len(_uat_attrs))
+
     _al    = AttributesListLoader(attr_f, brand=args.brand)
     md_map = LottoMDMappingLoader(attr_f)
     rna    = RNALoader(attr_f)
@@ -1800,7 +2194,8 @@ def run(args, auditor=None):
         # ── Pass 1: parallel map + validate ─────────────────────
         num_workers = min(8, max(1, total_rows))
         task_args   = [
-            (row, brand_lov_id, mdd, args.season, file_country_code, md_map, _brand_type, _brand_category, currency_mdd)
+            (row, brand_lov_id, mdd, args.season, file_country_code, md_map,
+             _brand_type, _brand_category, currency_mdd, recap.phase)
             for row in rows
         ]
         ordered: list[tuple[int, dict, list]] = []

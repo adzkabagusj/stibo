@@ -259,21 +259,76 @@ AIRWALK_MATERIAL_TYPE_LOV: dict[str, str] = {
 AIRWALK_DEFAULT_MATERIAL_TYPE = "ZINA"
 
 # ── Lotto Category → Sports Category EN display value ────────────
+# recap "MD Category" → Sports Category EN display value.
+# Source: "Airwalk Mapping Issues and References.xlsx" → "UAT Result" rows
+# 60-73 (License, Footwear only).  Keys are compared through
+# _sports_cat_display(), which ignores case and spaces.
 LOV_SPORTS_CATEGORY_EN: dict[str, str] = {
-    "BADMINTON":    "Tennis / Padel",
-    "CASUAL":       "Lifestyle / Casual",
-    "FUTSAL":       "Soccer",
-    "HIKING":       "Outdoor / Trail / Hiking",
-    "KIDS":         "Lifestyle / Casual",
-    "LIFESTYLE":    "Lifestyle / Casual",
-    "OUTDOOR":      "Outdoor / Trail / Hiking",
-    "OUTDOOR SHOE": "Outdoor / Trail / Hiking",
-    "PADEL":        "Tennis / Padel",
-    "RUNNING":      "Running",
-    "SANDALS":      "Other",
-    "SOCCER":       "Soccer",
-    "TENNIS":       "Tennis / Padel",
+    "CASUAL":           "Lifestyle / Casual",
+    "BASKETBALL":       "Basketball",
+    "LIFESTYLE":        "Lifestyle / Casual",
+    "SOCCER":           "Soccer",
+    "FITNESS":          "Fitness / Training",
+    "KIDS":             "Lifestyle / Casual",
+    "TENNIS/BADMINTON": "Tennis / Padel",
+    "TENNIS":           "Tennis / Padel",
+    "BADMINTON":        "Badminton",
+    "OUTDOOR":          "Outdoor / Trail / Hiking",
+    "RUNNING":          "Running",
+    "SANDAL":           "Lifestyle / Casual",
+    "SANDALS":          "Lifestyle / Casual",
+    "SKATE":            "Skateboarding",
+    # kept from the previous table (not in the UAT list, harmless)
+    "FUTSAL":           "Soccer",
+    "HIKING":           "Outdoor / Trail / Hiking",
+    "OUTDOORSHOE":      "Outdoor / Trail / Hiking",
+    "PADEL":            "Tennis / Padel",
 }
+
+
+def _sports_cat_display(raw: str) -> str:
+    """recap MD Category → Sports Category EN display ('' when unmapped)."""
+    key = re.sub(r"[^A-Z0-9/]", "", (raw or "").upper())
+    return LOV_SPORTS_CATEGORY_EN.get(key, "")
+
+
+# Ecom Gender Description EN — (SAP Gender display, SAP Age display) → text.
+# Source: MDD sheet "SIS Gender & Age Mapping" (CRC GENDER column) and
+# "Mapping to STIBO" row 312-313 ("Men + Kids → Boys").  Attribute max
+# length is 10, so "KIDS UNISEX" is shortened to "Kids".
+# recap "Gender" → (gender key, age key implied by the word itself or "").
+_ECOM_GENDER_TOKEN: dict[str, tuple[str, str]] = {
+    "MALE": ("MALE", ""), "MAN": ("MALE", ""), "MEN": ("MALE", ""), "MENS": ("MALE", ""), "M": ("MALE", ""),
+    "FEMALE": ("FEMALE", ""), "WOMAN": ("FEMALE", ""), "WOMEN": ("FEMALE", ""), "WOMENS": ("FEMALE", ""),
+    "F": ("FEMALE", ""), "W": ("FEMALE", ""),
+    "UNISEX": ("UNISEX", ""), "UNI": ("UNISEX", ""), "U": ("UNISEX", ""),
+    "BOY": ("MALE", "CHILDREN"), "BOYS": ("MALE", "CHILDREN"),
+    "GIRL": ("FEMALE", "CHILDREN"), "GIRLS": ("FEMALE", "CHILDREN"),
+    "KID": ("UNISEX", "CHILDREN"), "KIDS": ("UNISEX", "CHILDREN"),
+}
+# recap "Age Group" tokens that mean Children (everything else is Adults).
+_ECOM_CHILD_AGE_TOKENS = {"KID", "KIDS", "CHILD", "CHILDREN", "INFANT", "TODDLER", "PRESCHOOL",
+                          "PRESCHOOLER", "GRADESCHOOL", "YOUTH", "JUNIOR", "CH"}
+
+ECOM_GENDER_DESC: dict[tuple[str, str], str] = {
+    ("MALE",   "ADULTS"):   "Men",
+    ("FEMALE", "ADULTS"):   "Women",
+    ("UNISEX", "ADULTS"):   "Unisex",
+    ("MALE",   "CHILDREN"): "Boys",
+    ("FEMALE", "CHILDREN"): "Girls",
+    ("UNISEX", "CHILDREN"): "Kids",
+}
+
+# E-com Ages Category — "Mapping to STIBO" row 311: Default "Ages 18+ years".
+# The MDD "E-com Ages Category LOV" sheet has its Code and Name columns out
+# of step (18+Y sits next to "Ages 9-12 months"), so the id is fixed here,
+# as Asics / K-Swiss / New Era do.
+ECOM_AGES_CATEGORY_DEFAULT_ID = "18+Y"
+
+# Country Size — "Mapping to STIBO" row 308: Default EUR for Footwear.  The
+# MDD "Country Size LOV" lists display "EU/EUR" with id "UE"; the id is
+# resolved from that sheet at runtime and this is only the fallback.
+COUNTRY_SIZE_EUR_FALLBACK_ID = "UE"
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -343,8 +398,31 @@ class MDDLoader:
         self._load_named_lov_sheets(wb)
         self._load_age_lov(wb)
         self._load_gender_lov(wb)
+        self._load_brand_group_sheet(wb)
         wb.close()
         log.info("[MDD] %d attributes | %d LOVs", len(self.attributes), len(self.lovs))
+
+    def _load_brand_group_sheet(self, wb):
+        """MDD sheet "Brand Group" (no "LOV" suffix, so _load_named_lov_sheets
+        skips it): col A = Code (LOV id), col B = Brand Group (display).
+        Stored as {id: display} under "Brand Group" for AT_BrandGroup."""
+        sheet = next(
+            (s for s in wb.sheetnames if s.strip().upper() in ("BRAND GROUP", "BRAND GROUP LOV")),
+            None,
+        )
+        if not sheet:
+            log.warning("[MDD] Brand Group sheet not found")
+            return
+        lov: dict[str, str] = {}
+        for row in list(wb[sheet].iter_rows(values_only=True))[1:]:
+            if not row or len(row) < 2 or not row[0]:
+                continue
+            lov_id  = str(row[0]).strip()
+            display = str(row[1]).strip() if row[1] else lov_id
+            if lov_id:
+                lov[lov_id] = display
+        self.lovs["Brand Group"] = lov
+        log.info("[MDD] Brand Group sheet '%s' loaded — %d entries", sheet, len(lov))
 
     def _load_simple_lovs(self, wb):
         if "Simple LOVs" not in wb.sheetnames:
@@ -631,10 +709,12 @@ class RNALoader:
         c_bcode   = _find("BRANDCODE", "BRAND CODE", "REPORTING BRAND CODE MAPPED")
         c_btype   = _find("BRANDTYPE_DETAIL", "BRAND TYPE", "AT_BRANDTYPE", "BRANDTYPE")
         c_bcat    = _find("BRANDCATEGORY", "BRAND CATEGORY", "AT_BRANDCATEGORY", "BRANDCATEGORY")
+        c_bgroup  = _find("BRANDGROUP", "BRAND GROUP", "AT_BRANDGROUP")
 
         missing = [nm for nm, idx in [
             ("Country", c_country), ("CompCode", c_comp), ("SBU", c_sbu),
             ("BrandCode", c_bcode), ("BrandType", c_btype), ("BrandCategory", c_bcat),
+            ("BrandGroup", c_bgroup),
         ] if idx is None]
         if missing:
             log.warning("[RNA] Missing columns in '%s': %s", sheet_name, missing)
@@ -658,6 +738,7 @@ class RNALoader:
             self.lookup[key] = {
                 "brand_type":     _cell(row, c_btype),
                 "brand_category": _cell(row, c_bcat),
+                "brand_group":    _cell(row, c_bgroup),
             }
             count += 1
 
@@ -672,7 +753,7 @@ class RNALoader:
             (sbu        or "").strip().upper(),
             (brand_code or "").strip().upper(),
         )
-        return self.lookup.get(key, {"brand_type": "", "brand_category": ""})
+        return self.lookup.get(key, {"brand_type": "", "brand_category": "", "brand_group": ""})
 
     def get_fuzzy(self, country_name: str, sbu: str, brand_code: str) -> dict:
         """Match on country + brand only — ignores comp_code."""
@@ -687,7 +768,7 @@ class RNALoader:
         for (kc, _, ks, kb), val in self.lookup.items():
             if kc == c and kb == b:
                 return val
-        return {"brand_type": "", "brand_category": ""}
+        return {"brand_type": "", "brand_category": "", "brand_group": ""}
 
 
 class AirwalkRecapLoader:
@@ -797,6 +878,77 @@ def _s(v) -> str:
         return ""
     s = str(v).strip()
     return "" if s in ("None", "nan", "0", "NaT") else s
+
+
+def _hkey(v) -> str:
+    """Header / LOV display → A-Z0-9 key (ignores case, spaces, line breaks, '#')."""
+    return re.sub(r"[^A-Z0-9]", "", str(v or "").upper())
+
+
+def _cell(recap_row, *names: str) -> str:
+    """First non-blank cell whose header matches one of *names* (via _hkey)."""
+    want = {_hkey(n) for n in names}
+    for k, v in recap_row.items():
+        if _hkey(k) in want:
+            s = _s(v)
+            if s:
+                return s
+    return ""
+
+
+_CURRENCY_ALIASES = {
+    "US": "USD", "USD": "USD", "USDOLLAR": "USD", "USDOLLARS": "USD",
+    "UNITEDSTATESDOLLAR": "USD", "RP": "IDR", "RMB": "CNY", "EURO": "EUR",
+}
+
+
+def _norm_currency(raw: str) -> str:
+    """Recap "FOB Currency" cell → 3-letter ISO LOV id ('US$' / '$' → 'USD')."""
+    v = (raw or "").strip()
+    if not v:
+        return ""
+    if v in ("$", "US$", "USD$"):
+        return "USD"
+    alias = _CURRENCY_ALIASES.get(_hkey(v))
+    if alias:
+        return alias
+    m = re.search(r"\b([A-Za-z]{3})\b", v)
+    if m:
+        return m.group(1).upper()
+    return _hkey(v)[:3]
+
+
+def _mdd_lov_id(mdd, lov_names, display: str, id_first: bool = False) -> str:
+    """LOV id for *display* from the MDD sheets named in *lov_names*, else *display*.
+
+    MDDLoader stores every "* LOV" sheet as {col A: col B}.  Most sheets are
+    col A = display, col B = id.  "Brand Group" is the other way round
+    (col A = id, col B = display), so callers pass ``id_first=True`` for it.
+    A value that already is an id comes back as is.
+    """
+    disp = (display or "").strip()
+    if not disp or mdd is None:
+        return disp
+    want = _hkey(disp)
+    for lov_name in lov_names:
+        table = mdd.lovs.get(lov_name) or {}
+        if not table:
+            continue
+        if id_first:
+            for lov_id, lov_disp in table.items():
+                if _hkey(lov_id) == want:               # already an id
+                    return str(lov_id).strip()
+            for lov_id, lov_disp in table.items():
+                if _hkey(lov_disp) == want and str(lov_id).strip():
+                    return str(lov_id).strip()
+        else:
+            for lov_disp, lov_id in table.items():
+                if _hkey(lov_id) == want:               # already an id
+                    return str(lov_id).strip()
+            for lov_disp, lov_id in table.items():
+                if _hkey(lov_disp) == want and str(lov_id).strip():
+                    return str(lov_id).strip()
+    return disp
 
 
 def _find_currency_mdd_source_file() -> Path | None:
@@ -1011,13 +1163,25 @@ def map_article_airwalk(recap_row: dict, brand_code: str = "AIW") -> dict:
     code_category   = _s(recap_row.get("Code Category") or "")
     article_type_raw = _s(recap_row.get("Article Type") or "")
     category     = _s(recap_row.get("Category"))
+    # Sports Category EN source (UAT Result rows 57-58): recap "MD Category"
+    # on both ingestions; "Category" kept as a fallback.
+    md_category  = _cell(recap_row, "MD Category", "Category")
     division_col = _s(recap_row.get("Division") or "")  # Read Division column from Excel
     size_range   = _s(recap_row.get("Size Range"))
     outsole      = _s(recap_row.get("Outsole \nMaterial") or recap_row.get("Outsole Material") or "")
     upper        = _s(recap_row.get("Upper \nMaterial") or recap_row.get("Upper Material") or "")
     supplier     = _s(recap_row.get("Supplier"))
     fob_raw      = _s(recap_row.get("FOB Price"))
-    currency_raw = _s(recap_row.get("Currency"))
+    # "Mapping to STIBO" row 148: the recap header is "FOB Currency" (1st & 2nd
+    # ingestion).  Header matching ignores case / spaces / line breaks
+    # ("FOB \nCurrency"), and plain "Currency" is kept as a fallback.
+    currency_raw = _cell(recap_row, "FOB Currency", "Currency")
+    # "Mapping to STIBO" row 220: BCI is Manual Input on the 1st ingestion and
+    # the recap "BCI" column on the 2nd — read the column, never default it.
+    bci_raw      = _cell(recap_row, "BCI")
+    # recap "Age Group" (Adult / Kids / Infant / Preschool / …) — used with
+    # Gender for AT_EcomGenderDescriptionEN.
+    age_group_raw = _cell(recap_row, "Age Group", "Age")
     season       = _s(recap_row.get("Season"))
 
     # ── Derived fields ──────────────────────────────────────────
@@ -1043,8 +1207,8 @@ def map_article_airwalk(recap_row: dict, brand_code: str = "AIW") -> dict:
 
     fob_str = _extract_price(fob_raw)
 
-    # Currency
-    currency = currency_raw.upper() if currency_raw else ""
+    # Currency → 3-letter ISO LOV id ("US$" / "$" / "US Dollar" → "USD")
+    currency = _norm_currency(currency_raw)
 
     # Country of Origin - default CN (can be added to Excel file later)
     coo = "CN"
@@ -1160,7 +1324,8 @@ def map_article_airwalk(recap_row: dict, brand_code: str = "AIW") -> dict:
         "div_letter":        div_letter,         # SAP division letter
         "category":          category,           # OUTDOOR, CASUAL, KIDS, etc.
         "sub_category":      "",
-        "sports_cat_en":     LOV_SPORTS_CATEGORY_EN.get((category or "").strip().upper(), ""),
+        "md_category":       md_category,        # MD Category column
+        "sports_cat_en":     _sports_cat_display(md_category),
 
         # Commercial
         "article_type":      by_art_type,        # License
@@ -1177,6 +1342,10 @@ def map_article_airwalk(recap_row: dict, brand_code: str = "AIW") -> dict:
         "fob":               fob_str,
         "currency":          currency,
         "rrp":               "",
+
+        # BY
+        "bci":               bci_raw,            # BCI column (2nd ingestion) -> AT_BCI
+        "age_group":         age_group_raw,      # Age Group column
 
         # Origin / Supplier
         "coo":               coo,
@@ -1301,7 +1470,19 @@ def _add_generic_values(
     # ── Brand ────────────────────────────────────────────────────
     brand_lov_id = art["brand_code"]
     _w("AT_Brand",      id_val=brand_lov_id)
-    _w("AT_BrandGroup", id_val=brand_name.upper())
+
+    # AT_BrandGroup — "Mapping to STIBO" row 28: Formula in System, taken from
+    # the Attributes List sheet "2. Source Mapping related RNA", column
+    # BRANDGROUP, keyed on Compcode + SBU (+ brand).  The MDD "Brand Group"
+    # sheet turns the display value into the LOV id.  Falls back to the brand
+    # name only when the RNA sheet has no row for this brand.
+    brand_group = (art.get("brand_group") or "").strip()
+    if brand_group:
+        _w("AT_BrandGroup", brand_group,
+           id_val=_mdd_lov_id(mdd, ("Brand Group", "BrandGroup", "AT_BrandGroup"),
+                              brand_group, id_first=True))
+    else:
+        _w("AT_BrandGroup", id_val=brand_name.upper())
 
     # ── Principal identifiers ────────────────────────────────────
     _w("AT_PrincipalStyleCode",  art["article_no"])
@@ -1404,7 +1585,13 @@ def _add_generic_values(
 
     # ── Article Type & BCI ───────────────────────────────────────
     _w("AT_BYArticleType", "License", id_val="License")
-    _w("AT_BCI", "", id_val="COMMERCIAL")
+
+    # BCI — "Mapping to STIBO" row 220: 1st ingestion = Manual Input (filled
+    # by the user in Smartsheet later), 2nd ingestion = recap "BCI" column.
+    # Nothing is sent unless the recap carries a BCI value; no default.
+    bci_display = art.get("bci", "")
+    if bci_display:
+        _w("AT_BCI", bci_display, id_val=_mdd_lov_id(mdd, ("BCI", "BCILOV"), bci_display))
 
     # ── System indicators ────────────────────────────────────────
     _w("AT_SAPProductFlag", "A",  id_val="A")
@@ -1414,9 +1601,12 @@ def _add_generic_values(
     if fob_value:
         _w("AT_FOB", fob_value)
     
+    # AT_FOBCurrency — recap "FOB Currency" (1st & 2nd ingestion), normalised
+    # to the 3-letter ISO code and resolved against the MDD LOV.
     currency_value = art.get("currency")
     if currency_value:
-        _w("AT_FOBCurrency", currency_value, id_val=currency_value)
+        _w("AT_FOBCurrency", currency_value,
+           id_val=_mdd_lov_id(mdd, ("FOB Currency", "FOBCurrency", "Currency"), currency_value))
     
     rpc_id = _resolve_retail_price_currency(art.get("country_code", ""), art.get("mdd_currency"))
     if rpc_id:
@@ -1447,25 +1637,66 @@ def _add_generic_values(
     _w("AT_BrandType",     art.get("brand_type",     ""))
     # _w("AT_BrandCategory", art.get("brand_category", ""))
 
-    # ── Sports Category EN ────────────────────────────────────────
-    # Only include if Division column says "footwear"
-    division_col = (art.get("division_col") or "").strip().lower()
-    if division_col == "footwear":
+    # ── Sports Category EN (UAT Result rows 53-73) ────────────────
+    # License: Footwear only.  Source: recap "MD Category" → display value
+    # (LOV_SPORTS_CATEGORY_EN) → id from the MDD "Sports Category LOV" sheet
+    # (numeric, zero-padded to 2 digits: Running = "07").
+    is_footwear = _hkey(art.get("division_col")) in ("FOOTWEAR", "FW")
+    if is_footwear:
         sc_display = art.get("sports_cat_en", "")
         if sc_display and mdd:
-            sc_lov    = mdd.lovs.get("Sports Category", {})
-            sc_id_raw = sc_lov.get(sc_display, "")
-            if sc_id_raw:
+            sc_id = ""
+            sc_lov = mdd.lovs.get("Sports Category", {})
+            for lov_disp, lov_id in sc_lov.items():
+                if _hkey(lov_disp) == _hkey(sc_display) and str(lov_id).strip():
+                    sc_id = str(lov_id).strip()
+                    break
+            if sc_id:
                 try:
-                    sc_id = str(int(sc_id_raw)).zfill(2)
+                    sc_id = str(int(float(sc_id))).zfill(2)
                 except (ValueError, TypeError):
-                    sc_id = str(sc_id_raw).strip()
-                _w("AT_SportsCategoryEN", id_val=sc_id)
+                    pass
+                _w("AT_SportsCategoryEN", sc_display, id_val=sc_id)
+            else:
+                log.warning("[SportsCategory] %r not in MDD Sports Category LOV (article %s)",
+                            sc_display, art.get("article_no"))
+        elif art.get("md_category"):
+            log.warning("[SportsCategory] No mapping for MD Category %r (article %s)",
+                        art.get("md_category"), art.get("article_no"))
 
-    # ── Country Size ─────────────────────────────────────────────
-    # Only include if Division column says "footwear" (case-insensitive)
-    if division_col == "footwear":
-        _w("AT_CountrySize", "", id_val="EU")
+    # ── Country Size ("Mapping to STIBO" row 308: default EUR, Footwear) ─
+    # The MDD "Country Size LOV" carries display "EU/EUR" with id "UE" — the
+    # old hard-coded "EU" is not a valid id, which is why it came back
+    # "Not Populated".
+    if is_footwear:
+        cs_id = ""
+        for lov_disp, lov_id in (mdd.lovs.get("Country Size", {}) if mdd else {}).items():
+            if "EUR" in _hkey(lov_disp) or _hkey(lov_disp) == "EU":
+                cs_id = str(lov_id).strip()
+                break
+        _w("AT_CountrySize", "EU/EUR", id_val=cs_id or COUNTRY_SIZE_EUR_FALLBACK_ID)
+
+    # ── E-com Ages Category ("Mapping to STIBO" row 311: default 18+) ───
+    _w("AT_EComAgesCategory", "Ages 18+ years", id_val=ECOM_AGES_CATEGORY_DEFAULT_ID)
+
+    # ── Ecom Gender Description EN ("Mapping to STIBO" rows 312-313) ────
+    # SAP Gender display + SAP Age display → Men / Women / Unisex / Boys /
+    # Girls / Kids (see ECOM_GENDER_DESC).
+    # The recap "Gender" (Boys / Girls / Men / Women / Unisex) and "Age Group"
+    # columns are read first — "Boys" already means Male + Children — and the
+    # resolved SAP Gender / SAP Age displays are the fallback.
+    g_key, a_key = _ECOM_GENDER_TOKEN.get(_hkey(art.get("gender_raw")), ("", ""))
+    if not g_key:
+        g_key = _hkey(g_lov_value)
+    if not a_key:
+        age_tok = _hkey(art.get("age_group"))
+        if age_tok:
+            a_key = "CHILDREN" if age_tok in _ECOM_CHILD_AGE_TOKENS else "ADULTS"
+        else:
+            a_key = "CHILDREN" if _hkey(sap_age_lov_value) == "CHILDREN" else "ADULTS"
+    ecom_gender = ECOM_GENDER_DESC.get((g_key, a_key), "")
+    if ecom_gender:
+        _w("AT_EcomGenderDescriptionEN", ecom_gender)
 
     # ── UOM (Unit of Measure) ────────────────────────────────────
     uom_code = "EA"
@@ -1603,12 +1834,14 @@ def build_product_xml(
 
 def _process_article(row_tuple):
     """Thread worker: map + validate one LOTTO row."""
-    row, brand_code, mdd_loader, season, country_code, md_mapping, brand_type, brand_category, mdd_currency = row_tuple
+    (row, brand_code, mdd_loader, season, country_code, md_mapping,
+     brand_type, brand_category, mdd_currency, brand_group) = row_tuple
     mapped = map_article_airwalk(row, brand_code=brand_code)
     mapped["season"]         = season
     mapped["country_code"]   = country_code
     mapped["brand_type"]     = brand_type
     mapped["brand_category"] = brand_category
+    mapped["brand_group"]    = brand_group
     mapped["mdd_currency"]   = mdd_currency
     # ── Resolve Gender via Lotto MD Mapping → MDD Gender LOV ───
     if md_mapping and mdd_loader:
@@ -1676,7 +1909,10 @@ def run(args, auditor=None):
             return None
         
         # Search for all matching files (exact name or keyword matches)
-        keywords = ["brand mapping", "brand_mapping", "mapping template", "brand template"]
+        # "Attributes List_complete_v6_….xlsx" carries the RNA sheet that feeds
+        # AT_BrandGroup (Mapping to STIBO row 28), so it must be recognised too.
+        keywords = ["brand mapping", "brand_mapping", "mapping template", "brand template",
+                    "attributes list", "attribute list", "attributes_list"]
         matches = []
         
         for file in d.glob("*.xlsx"):
@@ -1761,11 +1997,14 @@ def run(args, auditor=None):
 
     _brand_type     = _rna_result.get("brand_type",     "")
     _brand_category = _rna_result.get("brand_category", "")
+    _brand_group    = _rna_result.get("brand_group",    "")
 
     log.info(
-        "[RNA] country=%s  brand_type='%s'  brand_category='%s'",
-        _country_name, _brand_type, _brand_category,
+        "[RNA] country=%s  brand_type='%s'  brand_category='%s'  brand_group='%s'",
+        _country_name, _brand_type, _brand_category, _brand_group,
     )
+    if not _brand_group:
+        log.warning("[RNA] BRANDGROUP not resolved — AT_BrandGroup falls back to the brand name")
 
     # ── Load retail currency MDD ─────────────────────────────────
     currency_mdd = _load_retail_currency_mdd(mdd_f)   # reuse already-found MDD file
@@ -1801,7 +2040,8 @@ def run(args, auditor=None):
         # ── Pass 1: parallel map + validate ─────────────────────
         num_workers = min(8, max(1, total_rows))
         task_args   = [
-            (row, brand_lov_id, mdd, args.season, file_country_code, md_map, _brand_type, _brand_category, currency_mdd)
+            (row, brand_lov_id, mdd, args.season, file_country_code, md_map,
+             _brand_type, _brand_category, currency_mdd, _brand_group)
             for row in rows
         ]
         ordered: list[tuple[int, dict, list]] = []

@@ -1,11 +1,11 @@
 """
 lambda_function.py — Lambda Handler for ON Running (ONR)
 ========================================================
-Function name : map-stibo-inbound-validate-transform-onr-{env}
+Function name : map-stibo-inbound-validate-transform-onr-dev
 
 Trigger:
     EventBridge rule (S3 Object Created) scoped to:
-        s3://map-stibo-inbound-raw-{env}/raw/metadata/onr/*
+        s3://map-stibo-inbound-raw-dev/raw/metadata/onr/*
 
 ON Running-specific flow:
     • ONE input file from the brand: linesheet (Planet Sports)
@@ -32,7 +32,7 @@ S3 layout:
     raw/metadata/attributes_list.xlsx        ← shared global attr list
 
 Output:
-    s3://map-stibo-inbound-processed-{env}/
+    s3://map-stibo-inbound-processed-dev/
         processed/stepxml/onr/{filename}.xml
 """
 
@@ -288,6 +288,7 @@ def _list_principal_files(bucket: str, principal: str,
         found=found,
         include_types=ROOT_TYPES,
         exclude_types=exclude_types,
+        principal="onr",
         log=log,
     )
 

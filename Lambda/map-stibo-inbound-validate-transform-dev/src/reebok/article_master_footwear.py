@@ -234,6 +234,33 @@ def _s(v) -> str:
     s = str(v).strip()
     return "" if s in ("None", "nan", "0", "NaT", "#VALUE!") else s
 
+def _to_float(v) -> float | None:
+    """
+    Convert nilai harga menjadi float.
+
+    Mendukung nilai seperti:
+      80
+      80.0
+      "80"
+      "80.00"
+      "$80.00"
+      "1,250.00"
+
+    Mengembalikan None jika nilai kosong atau tidak valid.
+    """
+    raw = _s(v)
+    if not raw:
+        return None
+
+    cleaned = re.sub(r"[^\d.\-]", "", raw.replace(",", ""))
+
+    if not cleaned:
+        return None
+
+    try:
+        return float(cleaned)
+    except (TypeError, ValueError):
+        return None
 
 def _clean_name(name: str) -> str:
     """Strip standalone 'Reebok' / 'REE' tokens from a product name (per mapping notes)."""
@@ -241,6 +268,7 @@ def _clean_name(name: str) -> str:
         return name
     cleaned = re.sub(r"\b(REEBOK|REE)\b", "", name, flags=re.IGNORECASE)
     return re.sub(r"\s{2,}", " ", cleaned).strip(" -")
+
 
 
 def _fmt_date(v) -> str:
@@ -1277,10 +1305,34 @@ def build_product_xml(
     # ── Pricing (Direct from Principal) ────────────────────────────
     if generic.get("fob"):
         _val_text(gv, "AT_FOB", generic["fob"])
-    if generic.get("msrp"):
-        _val_text(gv, "AT_OriginalPrice", generic["msrp"])
-        _val_text(gv, "AT_CurrentPrice",  generic["msrp"])
 
+    # if generic.get("msrp"):
+    #     _val_text(gv, "AT_OriginalPrice", generic["msrp"])
+    #     _val_text(gv, "AT_CurrentPrice",  generic["msrp"])
+
+
+
+    # AT_PrincipalMerchandiseHierarchyL5 ditentukan berdasarkan MSRP:
+    # MSRP > 80  = Premium
+    # MSRP <= 80 = Core
+    msrp_value = _to_float(generic.get("msrp"))
+
+    if msrp_value is not None:
+        merchandise_hierarchy_l5 = "Premium" if msrp_value > 80 else "Core"
+
+        _val_text(
+            gv,
+            "AT_PrincipalMerchandiseHierarchyL5",
+            merchandise_hierarchy_l5,
+        )
+    else:
+        log.warning(
+            "[XML] MSRP '%s' empty or not valid. "
+            "AT_PrincipalMerchandiseHierarchyL5 skipped for %s",
+            generic.get("msrp", ""),
+            generic["generic_key"],
+        )
+        
     # ── Launching Date (Direct from Principal ← Retail Intro Date) ──
     if generic.get("launch_date"):
         _val_text(gv, "AT_LaunchingDate", generic["launch_date"])

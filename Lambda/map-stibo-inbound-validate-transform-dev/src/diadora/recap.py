@@ -139,6 +139,35 @@ DIA_GENDER_MAP = {
     "BOYS": "Male", "GIRLS": "Female", "MEN": "Male", "WOMEN": "Female"
 }
 
+# ── SAP Age — Lotto logic ("BY Age & Gender": Preschool / Kids / Infant →
+# Children).  recap "Age Group" → (SAP Age display, LOV id); an empty Age
+# Group falls back to Gender (Boys / Girls / Kids → Children, else Adults).
+DIA_AGE_GROUP_TO_SAP_AGE: dict[str, tuple[str, str]] = {
+    "ADULT": ("Adults", "AD"), "ADULTS": ("Adults", "AD"), "AD": ("Adults", "AD"),
+    "KIDS": ("Children", "CH"), "KID": ("Children", "CH"), "CHILDREN": ("Children", "CH"),
+    "CHILD": ("Children", "CH"), "CH": ("Children", "CH"),
+    "INFANT": ("Children", "CH"), "PRESCHOOL": ("Children", "CH"), "GRADESCHOOL": ("Children", "CH"),
+    "ALLAGES": ("All Ages", "AA"), "AA": ("All Ages", "AA"),
+}
+_DIA_CHILD_GENDERS = {"BOY", "BOYS", "GIRL", "GIRLS", "KID", "KIDS", "CHILDREN"}
+
+# Generic code — Lotto formula (UAT-confirmed; shared by Lotto, Astec, Airwalk,
+# K-Swiss, Ellesse, Reebok): brand(3) + article type(1) + season-year digit(1)
+# + code category(1) + last 4 of Supp Art # + gender code(1) + colour code(1).
+DIA_ARTICLE_TYPE_CODE: dict[str, str] = {"LICENSE": "R", "SSE": "X", "WHOLESALE": "W", "SAMPLE": "S"}
+
+
+def _dia_key(v) -> str:
+    return re.sub(r"[^A-Z0-9]", "", str(v or "").upper())
+
+
+def _dia_sap_age(age_group: str, gender: str) -> tuple[str, str]:
+    """(SAP Age display, LOV id) for a recap Age Group, Gender as fallback."""
+    key = _dia_key(age_group)
+    if key:
+        return DIA_AGE_GROUP_TO_SAP_AGE.get(key, ("Adults", "AD"))
+    return ("Children", "CH") if _dia_key(gender) in _DIA_CHILD_GENDERS else ("Adults", "AD")
+
 
 RECAP_HEADER_HINTS = {
     "brand",
@@ -791,67 +820,38 @@ def _derive_generic_article_code(
     brand_code: str,
     row_num: int | None = None,
 ) -> str:
-    article_type_raw = _clean_text(row.get("Article Type"))
-    article_type_map = {
-        "REGULAR": "R",
-        "SSE": "X",
-        "LICENSE": "L",
-        "LICENSED": "L",
-    }
-    article_type_code = article_type_map.get(article_type_raw.upper(), "R")  # Default to R
+    """Generic code (KEY_InboundArticle / AT_Generic / AT_PrincipalStyleCode).
 
-    season_raw = _clean_text(row.get("Season")).upper()
-    season_prefix = season_raw[:2]
-    season_code_map = {
-        "SS": "S",
-        "FW": "F",
-        "AW": "F",  # Autumn Winter = Fall Winter
-        "HO": "H",
-    }
-    season_code = season_code_map.get(season_prefix, season_prefix[:1] if season_prefix else "S")
-    
-    _yr_match = re.search(r"(\d{2})$", season_raw)
-    season_year = _yr_match.group(1) if _yr_match else "00"
-
-    supplier_article = _clean_text(row.get("Supp Art #"))
-    supplier_suffix = supplier_article[-3:].rjust(3, "0") if supplier_article else "000"
-
-    color_code = _clean_text(row.get("Color Code"))
-    if not color_code:
-        # Fallback to color name to ensure unique generic codes
-        color_name = _clean_text(row.get("Color")).upper()
-        words = re.findall(r'[A-Z0-9]+', color_name)
-        if len(words) > 1:
-            color_code = words[0][0] + words[-1][0]
-        elif len(color_name) >= 2:
-            color_code = color_name[0] + color_name[-1]
-        else:
-            color_code = color_name.ljust(2, "0")
-        
-    color_suffix = color_code[-2:].rjust(2, "0") if color_code else "00"
-
-    missing = []
-    if not article_type_code:
-        missing.append(f"Article Type={article_type_raw!r}")
-    if not season_code:
-        missing.append(f"Season={season_raw!r}")
-    if not season_year:
-        missing.append("Season year")
-    if not supplier_suffix:
-        missing.append(f"Supp Art #={supplier_article!r}")
-    if not color_suffix:
-        missing.append(f"Color Code={color_code!r}")
-
-    if missing:
+    Lotto formula, UAT-confirmed ("Principal Style Code: Mirror to generic"):
+    brand(3) + article type(1) + season-year digit(1) + code category(1)
+    + last 4 alphanumerics of Supp Art # + gender code(1) + colour code(1).
+    """
+    supp_art = _clean_text(row.get("Supp Art #"))
+    if not supp_art:
         row_label = f" row {row_num}" if row_num is not None else ""
-        log.warning(
-            "[Recap] Cannot derive generic article code%s: %s",
-            row_label,
-            ", ".join(missing),
-        )
+        log.warning("[Recap] Cannot derive generic article code%s: Supp Art # is blank", row_label)
         return ""
 
-    return f"{brand_code}{article_type_code}{season_code}{season_year}{supplier_suffix}{color_suffix}"
+    art_type_char = DIA_ARTICLE_TYPE_CODE.get(_clean_text(row.get("Article Type")).upper(), "R")
+
+    season = _clean_text(row.get("Season")).upper()
+    season_match = re.match(r"^[A-Z]{1,2}(\d{2,4})$", season)
+    season_year_digit = season_match.group(1)[-1] if season_match else ""
+
+    code_cat_char = _dia_key(row.get("Code Category"))[:1]
+
+    supp_alnum = _dia_key(supp_art)
+    supp_last4 = supp_alnum[-4:].rjust(4, "0") if supp_alnum else "0000"
+
+    gender_code = _dia_key(row.get("Gender Code"))[:1]
+    if not gender_code:
+        sap_gender = DIA_GENDER_MAP.get(_clean_text(row.get("Gender")).upper(), "Unisex")
+        gender_code = sap_gender[:1].upper()
+
+    color_char = _dia_key(row.get("Color Code"))[:1]
+
+    return (f"{brand_code[:3]}{art_type_char}{season_year_digit}{code_cat_char}"
+            f"{supp_last4}{gender_code}{color_char}")
 
 
 def _product_key(row: dict[str, object], brand_code: str, row_num: int) -> str:
@@ -1141,12 +1141,17 @@ def _build_product_xml(
     if age_group_val:
         _write_simple_value(values, written, "AT_PrincipalAgeDescription", age_group_val)
         
-        reverse_lov_age = {v.upper(): k for k, v in LOV_AGE.items()}
-        sap_age_lov_id = reverse_lov_age.get(age_group_val.upper(), "AD")
-        _write_simple_value(values, written, "AT_SAPAge", age_group_val, id_val=sap_age_lov_id)
+        # SAP Age — Lotto logic: Preschool / Kids / Infant → Children (CH).
+        sap_age_disp, sap_age_lov_id = _dia_sap_age(age_group_val, gender_raw)
+        _write_simple_value(values, written, "AT_SAPAge", sap_age_disp, id_val=sap_age_lov_id)
         
         by_age_lov_value = LOV_BY_AGE.get(age_group_val.upper(), age_group_val)
         _write_simple_value(values, written, "AT_BYAge", by_age_lov_value, id_val=by_age_lov_value.upper())
+
+    if "AT_SAPAge" not in written:
+        # No Age Group in the recap: Gender stands in (Lotto logic).
+        sap_age_disp, sap_age_lov_id = _dia_sap_age("", gender_raw)
+        _write_simple_value(values, written, "AT_SAPAge", sap_age_disp, id_val=sap_age_lov_id)
 
     for entry in mappings:
         if entry.attribute_id in written:

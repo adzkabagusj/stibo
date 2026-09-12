@@ -187,6 +187,43 @@ K_SWISS_GENDER_TO_AGE: dict[str, str] = {
     "KIDS":   "CH",
 }
 
+# ── Gender / Age resolution (ported from the Lotto recap, UAT-confirmed) ──
+# Source: "KSwiss Mapping Issues and References.xlsx" → sheet "BY Age & Gender".
+# Keys are upper-case with spaces removed (compare through _hkey()).
+# recap "Gender" → (SAP Gender display, BY Gender display)
+K_SWISS_GENDER_MAP: dict[str, tuple[str, str]] = {
+    "MALE": ("Male", "Male"), "MAN": ("Male", "Male"), "MEN": ("Male", "Male"),
+    "MENS": ("Male", "Male"), "BOY": ("Male", "Male"), "BOYS": ("Male", "Male"), "M": ("Male", "Male"),
+    "FEMALE": ("Female", "Female"), "WOMAN": ("Female", "Female"), "WOMEN": ("Female", "Female"),
+    "WOMENS": ("Female", "Female"), "GIRL": ("Female", "Female"), "GIRLS": ("Female", "Female"),
+    "F": ("Female", "Female"), "W": ("Female", "Female"),
+    "UNISEX": ("Unisex", "Unisex"), "UNI": ("Unisex", "Unisex"), "U": ("Unisex", "Unisex"),
+}
+# recap "Age Group" → (SAP Age display, BY Age display)
+K_SWISS_AGE_GROUP_MAP: dict[str, tuple[str, str]] = {
+    "ADULT": ("Adults", "Adult"), "ADULTS": ("Adults", "Adult"), "AD": ("Adults", "Adult"),
+    "KIDS": ("Children", "Kids"), "KID": ("Children", "Kids"), "CHILDREN": ("Children", "Kids"),
+    "CHILD": ("Children", "Kids"), "CH": ("Children", "Kids"),
+    "ALLAGES": ("All Ages", "All Ages"), "AA": ("All Ages", "All Ages"),
+    "INFANT": ("Children", "Infant"),
+    "PRESCHOOL": ("Children", "Preschool"),
+    "GRADESCHOOL": ("Children", "Grade School"),
+}
+# Fallback only: recap Gender → Age Group when the recap has no Age Group.
+K_SWISS_GENDER_TO_AGE_GROUP: dict[str, str] = {
+    "BOY": "Kids", "BOYS": "Kids", "GIRL": "Kids", "GIRLS": "Kids",
+    "KIDS": "Kids", "KID": "Kids", "CHILDREN": "Kids",
+}
+# LOV ids documented in "Mapping to STIBO" rows 81-90 (SAP Age / SAP Gender).
+SAP_AGE_LOV_ID: dict[str, str] = {"Adults": "AD", "Children": "CH", "All Ages": "AA"}
+SAP_GENDER_LOV_ID: dict[str, str] = {"Male": "M", "Female": "F", "Unisex": "U"}
+# Stibo LOV_BYAge ids are the upper-cased displays (ADULT / ALL AGES / GRADE
+# SCHOOL / INFANT / KIDS / PRESCHOOL); the MDD "Age LOV" sheet has no id
+# column for BY Age, so this table is the fallback.
+BY_AGE_LOV_ID: dict[str, str] = {
+    v: v.upper() for v in ("Adult", "Kids", "All Ages", "Infant", "Preschool", "Grade School")
+}
+
 # LOTTO Category/Code Category to Product Division
 K_SWISS_CATEGORY_TO_DIVISION: dict[str, str] = {
     "OUTDOOR":      "F",   # Footwear
@@ -869,6 +906,15 @@ def _cell(recap_row, *names: str) -> str:
     return ""
 
 
+def _cell_raw(recap_row, *names: str):
+    """Like _cell but returns the raw cell (datetime stays datetime); None if blank."""
+    want = {_hkey(n) for n in names}
+    for k, v in recap_row.items():
+        if _hkey(k) in want and _s(v):
+            return v
+    return None
+
+
 _CURRENCY_ALIASES = {
     "US": "USD", "USD": "USD", "USDOLLAR": "USD", "USDOLLARS": "USD",
     "UNITEDSTATESDOLLAR": "USD", "RP": "IDR", "RMB": "CNY", "EURO": "EUR",
@@ -1041,17 +1087,18 @@ def _resolve_retail_price_currency(country_code: str, mdd: dict | None = None) -
 
 
 def _fmt_date(v) -> str:
-    """Format a date to dd-Mon-YYYY lowercase."""
+    """Format a date to DD-MM-YYYY (used by AT_IncomingMonth) — the format
+    UAT accepted for the Lotto recap."""
     if isinstance(v, datetime):
-        return v.strftime("%d-%b-%Y").lower()
+        return v.strftime("%d-%m-%Y")
     if hasattr(v, "strftime"):
-        return v.strftime("%d-%b-%Y").lower()
+        return v.strftime("%d-%m-%Y")
     raw = _s(v)
     if not raw:
         return raw
-    for fmt in ("%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d.%m.%Y"):
+    for fmt in ("%Y-%m-%d", "%Y-%m-%d %H:%M:%S", "%d/%m/%Y", "%m/%d/%Y", "%d.%m.%Y"):
         try:
-            return datetime.strptime(raw, fmt).strftime("%d-%b-%Y").lower()
+            return datetime.strptime(raw, fmt).strftime("%d-%m-%Y")
         except (ValueError, TypeError):
             pass
     return raw
@@ -1152,6 +1199,12 @@ def map_article_k_swiss(recap_row: dict, brand_code: str = "KSW") -> dict:
     # "Mapping to STIBO" row 220: BCI is Manual Input on the 1st ingestion and
     # the recap "BCI" column on the 2nd — read the column, never default it.
     bci_raw      = _cell(recap_row, "BCI")
+    # "Mapping to STIBO": Age Group → SAP Age / BY Age / Principal Age
+    # Description; Division → PMH L1; MD Category → PMH L2; ETA DATE →
+    # Incoming month (all 1st & 2nd ingestion).
+    age_group_raw = _cell(recap_row, "Age Group", "Age")
+    md_category   = _cell(recap_row, "MD Category", "Category")
+    eta_raw       = _cell_raw(recap_row, "ETA DATE", "ETA Date", "ETA")
     season       = _s(recap_row.get("Season"))
 
     # ── Derived fields ──────────────────────────────────────────
@@ -1315,6 +1368,9 @@ def map_article_k_swiss(recap_row: dict, brand_code: str = "KSW") -> dict:
 
         # BY
         "bci":               bci_raw,            # BCI column (2nd ingestion) -> AT_BCI
+        "age_group":         age_group_raw,      # Age Group column -> SAP/BY Age, AT_PrincipalAgeDescription
+        "md_category":       md_category,        # MD Category column -> AT_PrincipalMerchandiseHierarchyL2
+        "eta_date":          eta_raw,            # ETA DATE column -> AT_IncomingMonth
 
         # Origin / Supplier
         "coo":               coo,
@@ -1454,7 +1510,9 @@ def _add_generic_values(
         _w("AT_BrandGroup", id_val=brand_name.upper())
 
     # ── Principal identifiers ────────────────────────────────────
-    _w("AT_PrincipalStyleCode",  art["article_no"])
+    # UAT ("Revise -> Mirror to generic"): AT_PrincipalStyleCode carries the
+    # generic code, as the UAT-confirmed Lotto recap does.
+    _w("AT_PrincipalStyleCode",  art["generic_code"])
     _w("AT_PrincipalColorName",  art["colour"])
     _w("AT_PrincipalColorCode",  art["colour_code"])
     # _w("AT_SAPStyleCode",        art["sap_style_code"])
@@ -1484,50 +1542,49 @@ def _add_generic_values(
     art["at_generic_val"] = at_generic_val
     _w("AT_InboundGenericCode", at_generic_val)
 
-    # ── Gender ───────────────────────────────────────────────────
-    # AT_Gender: col G → col I → MDD Gender LOV
-    g_lov_value = art.get("gender_lov_value", "")
-    g_lov_id    = art.get("gender_lov_id", "")
-    if not g_lov_value:
-        g_code, g_lov_value = _lov(art["gender_code"], LOV_GENDER, art["gender_code"])
-        g_lov_id = g_code
-    _w("AT_Gender", g_lov_value, id_val=g_lov_id)
-
-    # AT_BYGender: col G → col K → MDD Gender LOV
-    by_lov_value = art.get("by_gender_lov_value", "")
-    by_lov_id    = art.get("by_gender_lov_id", "")
-    if not by_lov_value:
-        by_lov_value = g_lov_value   # fallback to SAP Gender value
-        by_lov_id    = g_lov_id
-    _w("AT_BYGender", by_lov_value, id_val=by_lov_id)
+    # ── Gender (UAT: SAP Gender / BY Gender "Not Populated") ─────
+    # Source: recap "Gender"; mapping: sheet "BY Age & Gender".  Both are
+    # LOVs, so each must carry an id — MDD Gender LOV first, then the
+    # documented M / F / U codes.
+    sap_gender = art.get("sap_gender_display", "")
+    by_gender  = art.get("by_gender_display", "")
+    if sap_gender:
+        sap_gender_id = _mdd_lov_id(mdd, ("GenderLOV", "Gender", "SAP Gender"), sap_gender)
+        if sap_gender_id == sap_gender:
+            sap_gender_id = SAP_GENDER_LOV_ID.get(sap_gender, sap_gender)
+        _w("AT_Gender", sap_gender, id_val=sap_gender_id)
+    if by_gender:
+        by_gender_id = _mdd_lov_id(mdd, ("BYGenderLOV", "BY Gender", "GenderLOV", "Gender"), by_gender)
+        if by_gender_id == by_gender:
+            by_gender_id = SAP_GENDER_LOV_ID.get(by_gender, by_gender)
+        _w("AT_BYGender", by_gender, id_val=by_gender_id)
 
     _w("AT_PrincipalGenderDescription", art["gender_raw"])
     _w("AT_PrincipalGenderCode", art.get("gender_code_raw", ""))
 
-    # ── Age ──────────────────────────────────────────────────────
-    # AT_SAPAge: col G → col H → MDD Age LOV (col A → col B)
-    sap_age_lov_value = art.get("sap_age_lov_value", "")
-    sap_age_lov_id    = art.get("sap_age_lov_id", "")
-    if not sap_age_lov_value:
-        # fallback to hardcoded LOV_AGE
-        age_code          = art["age_code"]
-        sap_age_lov_value = LOV_AGE.get(age_code, age_code)
-        sap_age_lov_id    = age_code
-    _w("AT_SAPAge", sap_age_lov_value, id_val=sap_age_lov_id)
+    # ── Age (UAT: SAP Age / BY Age / Principal Age Description) ──
+    # Source: recap "Age Group"; the Gender column only stands in when the
+    # recap has no Age Group at all.
+    sap_age = art.get("sap_age_display", "")
+    by_age  = art.get("by_age_display", "")
+    if sap_age:
+        sap_age_id = _mdd_lov_id(mdd, ("AgeLOV", "Age", "SAP Age"), sap_age)
+        if sap_age_id == sap_age:
+            sap_age_id = SAP_AGE_LOV_ID.get(sap_age, sap_age)
+        _w("AT_SAPAge", sap_age, id_val=sap_age_id)
+    if by_age:
+        # "AgeLOV" is deliberately not consulted here: it holds the SAP ages
+        # and would turn BY Age "All Ages" into the SAP id "AA".
+        by_age_id = _mdd_lov_id(mdd, ("ByAgeLOV", "BY Age"), by_age)
+        if by_age_id == by_age:
+            by_age_id = BY_AGE_LOV_ID.get(by_age, by_age.upper())
+        _w("AT_BYAge", by_age, id_val=by_age_id)
 
-    by_age_val = LOV_BY_AGE.get(art["age_code"], "Adult")
-    # AT_BYAge: col G → col J → MDD Age LOV (col G=display → col F=id)
-    by_age_lov_value = art.get("by_age_lov_value", "")
-    by_age_lov_id    = art.get("by_age_lov_id", "")
-    if not by_age_lov_value:
-        # fallback to hardcoded LOV_BY_AGE
-        by_age_lov_value = LOV_BY_AGE.get(art["age_code"], "Adult")
-        by_age_lov_id    = by_age_lov_value.upper()
-    _w("AT_BYAge", by_age_lov_value, id_val=by_age_lov_id)
-
-
-    # AT_PrincipalAgeDescription is NA in attribute file
-    # _w("AT_PrincipalAgeDescription", art["age_raw"] or age_code)
+    # AT_PrincipalAgeDescription — the raw "Age Group" when the recap has
+    # one, otherwise the value the Age mapping resolved to.
+    age_description = art.get("age_group") or by_age
+    if age_description:
+        _w("AT_PrincipalAgeDescription", age_description)
 
     # ── Season ───────────────────────────────────────────────────
     sea_raw   = art.get("season", "")
@@ -1542,6 +1599,19 @@ def _add_generic_values(
     else:
         season_year = year_match.group()
     _w("AT_SeasonYear", season_year)
+
+    # ── Merchandise Hierarchy (UAT: PMH L1 / L2 "Not Populated") ──
+    # L1 → recap "Division", L2 → recap "MD Category".
+    if art.get("division_col"):
+        _w("AT_PrincipalMerchandiseHierarchyL1", art["division_col"])
+    if art.get("md_category"):
+        _w("AT_PrincipalMerchandiseHierarchyL2", art["md_category"])
+
+    # ── Incoming Month → recap "ETA DATE" (UAT: "Not Populated") ──
+    if art.get("eta_date") is not None:
+        incoming_month = _fmt_date(art["eta_date"])
+        if incoming_month:
+            _w("AT_IncomingMonth", incoming_month)
 
     # ── Country of Origin ────────────────────────────────────────
     # coo_code, coo_label = _lov(art["coo"], LOV_COUNTRY_ORIGIN, art["coo"])
@@ -1783,6 +1853,44 @@ def build_product_xml(
 # SECTION 6 — THREAD WORKER
 # ══════════════════════════════════════════════════════════════════
 
+def _resolve_gender_age(mapped: dict, md_mapping=None) -> None:
+    """Fill the four SAP/BY Gender + Age display values on *mapped*.
+
+    Priority is the brand-mapping workbook ("K_Swiss MD Mapping" tab) when it
+    has a row for the value, then the tables transcribed from the "BY Age &
+    Gender" sheet.  Gender drives Gender; the recap "Age Group" column drives
+    Age, and only when that column is absent does Gender stand in for it.
+    """
+    gender_raw = mapped.get("gender_raw", "") or ""
+    age_raw    = mapped.get("age_group", "") or ""
+
+    sap_g, by_g = K_SWISS_GENDER_MAP.get(_hkey(gender_raw), ("", ""))
+    if md_mapping is not None:
+        sap_g = md_mapping.get_lov_value(gender_raw) or sap_g
+        by_g  = md_mapping.get_by_gender_lov_value(gender_raw) or by_g
+    if not sap_g and gender_raw:
+        sap_g = gender_raw.strip().title()
+    if not by_g:
+        by_g = sap_g
+
+    age_key = age_raw or K_SWISS_GENDER_TO_AGE_GROUP.get(_hkey(gender_raw), "Adult")
+    sap_a, by_a = K_SWISS_AGE_GROUP_MAP.get(_hkey(age_key), ("", ""))
+    if md_mapping is not None:
+        sap_a = (md_mapping.get_sap_age_lov_value(age_key)
+                 or md_mapping.get_sap_age_lov_value(gender_raw) or sap_a)
+        by_a  = (md_mapping.get_by_age_lov_value(age_key)
+                 or md_mapping.get_by_age_lov_value(gender_raw) or by_a)
+    if not sap_a:
+        sap_a = "Adults"
+    if not by_a:
+        by_a = "Kids" if sap_a == "Children" else ("All Ages" if sap_a == "All Ages" else "Adult")
+
+    mapped["sap_gender_display"] = sap_g
+    mapped["by_gender_display"]  = by_g
+    mapped["sap_age_display"]    = sap_a
+    mapped["by_age_display"]     = by_a
+
+
 def _process_article(row_tuple):
     """Thread worker: map + validate one LOTTO row."""
     (row, brand_code, mdd_loader, season, country_code, md_mapping,
@@ -1794,39 +1902,14 @@ def _process_article(row_tuple):
     mapped["brand_category"] = brand_category
     mapped["brand_group"]    = brand_group
     mapped["mdd_currency"]   = mdd_currency
-    # ── Resolve Gender via Lotto MD Mapping → MDD Gender LOV ───
-    if md_mapping and mdd_loader:
-        raw_gender = mapped.get("gender_raw", "")
-        gender_lov = mdd_loader.lovs.get("GenderLOV", {})
-
-        # AT_Gender: col G → col I → MDD Gender LOV
-        sap_lov_value             = md_mapping.get_lov_value(raw_gender)
-        mapped["gender_lov_value"] = sap_lov_value
-        mapped["gender_lov_id"]    = gender_lov.get(sap_lov_value, "")
-
-        # AT_BYGender: col G → col K → MDD Gender LOV
-        by_lov_value                 = md_mapping.get_by_gender_lov_value(raw_gender)
-        mapped["by_gender_lov_value"] = by_lov_value
-        mapped["by_gender_lov_id"]    = gender_lov.get(by_lov_value, "")
-
-        # AT_SAPAge: col G → col H → MDD Age LOV (col A → col B)
-        age_lov      = mdd_loader.lovs.get("AgeLOV", {})
-        sap_age_disp = md_mapping.get_sap_age_lov_value(raw_gender)  # e.g. "Children"
-        mapped["sap_age_lov_value"] = sap_age_disp
-        mapped["sap_age_lov_id"]    = age_lov.get(sap_age_disp, "")  # e.g. "CH"
-
-        # AT_BYAge: col G → col J → MDD Age LOV (col G=display → col F=id)
-        by_age_lov   = mdd_loader.lovs.get("ByAgeLOV", {})
-        by_age_disp  = md_mapping.get_by_age_lov_value(raw_gender)   # e.g. "Kids"
-        mapped["by_age_lov_value"] = by_age_disp
-        mapped["by_age_lov_id"]    = by_age_lov.get(by_age_disp, "") # e.g. "KIDS"
-
-        log.debug("[Gender] raw='%s' → SAP='%s'(%s)  BY='%s'(%s)  SAPAge='%s'(%s)  BYAge='%s'(%s)",
-                  raw_gender,
-                  sap_lov_value, mapped["gender_lov_id"],
-                  by_lov_value,  mapped["by_gender_lov_id"],
-                  sap_age_disp,  mapped["sap_age_lov_id"],
-                  by_age_disp,   mapped["by_age_lov_id"])
+    # SAP / BY Gender + Age display values (brand-mapping workbook first,
+    # then the "BY Age & Gender" tables).  LOV ids are resolved later in
+    # _add_generic_values against the MDD.
+    _resolve_gender_age(mapped, md_mapping)
+    log.debug("[Gender/Age] gender=%r age_group=%r → SAP %s / %s   BY %s / %s",
+              mapped.get("gender_raw"), mapped.get("age_group"),
+              mapped["sap_gender_display"], mapped["sap_age_display"],
+              mapped["by_gender_display"],  mapped["by_age_display"])
     warns = validate(mapped, mdd_loader)
     return mapped, warns
 

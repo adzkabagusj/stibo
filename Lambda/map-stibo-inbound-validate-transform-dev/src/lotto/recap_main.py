@@ -277,6 +277,16 @@ SAP_AGE_LOV_ID: dict[str, str] = {
 }
 SAP_GENDER_LOV_ID: dict[str, str] = {"Male": "M", "Female": "F", "Unisex": "U"}
 
+# BY Age LOV ids are the upper-cased display values — Stibo LOV_BYAge accepts
+# exactly ADULT / ALL AGES / GRADE SCHOOL / INFANT / KIDS / PRESCHOOL (see the
+# Nike and Reebok modules).  The MDD "Age LOV" sheet lists the BY Age display
+# values (col G) without an id column, so the lookup there always misses and
+# the mixed-case display ("Preschool") went out as the id — that is the
+# "BY Age still wrong" UAT feedback.
+BY_AGE_LOV_ID: dict[str, str] = {
+    v: v.upper() for v in ("Adult", "Kids", "All Ages", "Infant", "Preschool", "Grade School")
+}
+
 # BCI has no 1st-ingestion default: "Mapping to STIBO" row 219 says
 # "1st ingestion : Manual Input", so the attribute is left blank until the
 # 2nd ingestion supplies the recap "BCI" column.
@@ -1727,8 +1737,13 @@ def _add_generic_values(
         _w("AT_SAPAge", sap_age,
            id_val=_lov_id(mdd, ("AgeLOV", "Age", "SAP Age"), sap_age, SAP_AGE_LOV_ID))
     if by_age:
-        _w("AT_BYAge", by_age,
-           id_val=_lov_id(mdd, ("ByAgeLOV", "BY Age", "AgeLOV"), by_age))
+        # MDD "BY Age" LOV first (if the MDD ever gains an id column), then
+        # BY_AGE_LOV_ID.  "AgeLOV" is deliberately not consulted: it holds the
+        # SAP ages and would turn BY Age "All Ages" into the SAP id "AA".
+        by_age_id = _lov_id(mdd, ("ByAgeLOV", "BY Age"), by_age, BY_AGE_LOV_ID)
+        if by_age_id == by_age:
+            by_age_id = by_age.upper()
+        _w("AT_BYAge", by_age, id_val=by_age_id)
 
     # AT_PrincipalAgeDescription — UAT Result rows 5-6 ask for it mirrored onto
     # the generic, so it is written for every article: the raw "Age Group" when

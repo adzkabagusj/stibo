@@ -4,7 +4,7 @@
 ║  Global Inline Apparel Sample Breakout → Stibo STEP XML              ║
 ╚══════════════════════════════════════════════════════════════════════╝
 
-Source file  : "S1'27 Global Inline Apparel Sample Breakout file_01.7.2026.xlsx"
+Source file  : "S127 Global Inline Apparel Sample Breakout file_01.7.2026.xlsx"
 Primary tab  : FIRST VISIBLE sheet — "Sheet1"
                (title row 1, blank row 2, header row 3, data from row 4;
                 the header row is located dynamically by scanning for "SKU")
@@ -311,6 +311,11 @@ STIBO_NS     = "http://www.stibosystems.com/step"
 STIBO_XSI    = "http://www.w3.org/2001/XMLSchema-instance"
 STIBO_SCHEMA = "http://www.stibosystems.com/step PIM.xsd"
 
+# Serialise STEP-namespace elements with the DEFAULT namespace (clean,
+# unprefixed tags after the _XMLNS_RE strip below) — same convention as
+# every other NB ETL module. Without this, output depends on whether a
+# sibling module happened to register the namespace first.
+ET.register_namespace("", STIBO_NS)
 _XMLNS_RE = re.compile(r'\s+xmlns="[^"]*"')
 
 

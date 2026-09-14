@@ -15,6 +15,9 @@ File-type → ETL dispatch:
     │ "Line List (Footwear GTM)" / "...GTM..."  → new_balance.inline_gtm_...   │
     │ "Line List"  (no Apparel/Footwear qual.) → new_balance.linelist_main    │
     │ "Ecommerce File"                         → new_balance.ecommerce_main   │
+    │ "SMS Election" (Footwear)                → new_balance.sample_footwear  │
+    │ "Apparel Sample Breakout"                → new_balance.sample_apparel   │
+    │ "Accessories Sample Breakout"            → new_balance.sample_acc       │
     └─────────────────────────────────────────────────────────────────────────┘
 
     Detection order matters:
@@ -76,6 +79,9 @@ import new_balance.licensed_ecommerce_main as etl_ecommerce       # NB ecommerce
 import new_balance.inline_ecommerce_main as etl_inline_ecommerce  # NB inline ecommerce export
 import new_balance.inline_ean_source as etl_ean_source   #inline EAN SOURCE
 import new_balance.licensed_ordersheet_main as etl_licensed_ordersheet  # NB licensed order sheet
+import new_balance.inline_sample_footwear_main as etl_sample_footwear   # NB sample footwear (SMS Election)
+import new_balance.inline_sample_apparel_main as etl_sample_apparel     # NB sample apparel breakout
+import new_balance.inline_sample_accessories_main as etl_sample_accessories  # NB sample accessories breakout
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Logging
@@ -138,6 +144,21 @@ CATEGORY_TO_SBU: dict[str, str] = {
 #
 # ─────────────────────────────────────────────────────────────────────────────
 FILE_TYPE_KEYWORDS: dict[str, list[str]] = {
+    # ── 0z. NB Sample templates (most specific — must precede the generic
+    #     footwear/apparel/accessories keywords so breakout files are not
+    #     swallowed by the plain line-list types) ─────────────────────────
+    "sample_footwear": [
+        "sms election",
+        "footwear initial sms",
+    ],
+    "sample_apparel": [
+        "apparel sample breakout",
+        "inline apparel sample",
+    ],
+    "sample_accessories": [
+        "accessories sample breakout",
+        "licensed accessories sample",
+    ],
     # ── 0 EAN ───────────────────────
     "ean_source": [
     "ean source", "ean_source",
@@ -247,6 +268,9 @@ ETL_DISPATCHER: dict[str, object] = {
     "ecommerce_inline":   etl_inline_ecommerce,
     "ean_source": etl_ean_source,
     "ordersheet_licensed":  etl_licensed_ordersheet,
+    "sample_footwear":      etl_sample_footwear,
+    "sample_apparel":       etl_sample_apparel,
+    "sample_accessories":   etl_sample_accessories,
 }
 
 # SBU per ETL type — keeps output filenames unique
@@ -259,7 +283,10 @@ ETL_TYPE_SBU: dict[str, str] = {
     "ecommerce_licensed": "SP",
     "ecommerce_inline":   "SP",
     "ean_source": "FW",
-    "ordersheet_licensed":  "SP", 
+    "ordersheet_licensed":  "SP",
+    "sample_footwear":     "FW",
+    "sample_apparel":      "AP",
+    "sample_accessories":  "AC",
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -281,6 +308,9 @@ REQUIRED_TYPES_BY_TRIGGER: dict[str, set[str]] = {
     "ecommerce_inline":   {"ecommerce_inline",   "mdd", "attributes"},
     "ean_source": {"ean_source", "mdd"},
     "ordersheet_licensed":  {"ordersheet_licensed", "mdd", "attributes"},
+    "sample_footwear":     {"sample_footwear",     "mdd", "attributes"},
+    "sample_apparel":      {"sample_apparel",      "mdd", "attributes"},
+    "sample_accessories":  {"sample_accessories",  "mdd", "attributes"},
 }
 
 # Global types fetched from raw/metadata/ root (not brand subfolder)
@@ -385,6 +415,21 @@ def _detect_file_type(filename: str) -> str | None:
     if has_gtm and has_fw_list and not has_apparel:
         return "linelist_footwear_gtm"
 
+    # NB Sample templates — three distinct files:
+    #   "S1 27 Footwear Initial SMS Election_…"   (footwear, no 'sample' word!)
+    #   "S1'27 Global Inline Apparel Sample Breakout file_…"
+    #   "S127 Licensed Accessories Sample Breakout file _ …"
+    # Checked BEFORE the keyword loop so the generic apparel/accessories/
+    # footwear entries cannot swallow the breakout files.
+    has_sample_breakout = "sample breakout" in name_norm
+    has_sms_election    = "sms election" in name_norm
+    if has_sms_election and has_fw_list and not has_apparel:
+        return "sample_footwear"
+    if has_sample_breakout and "apparel" in name_norm:
+        return "sample_apparel"
+    if has_sample_breakout and "accessor" in name_norm:
+        return "sample_accessories"
+
     # App/Acc line list — "App Acc" or "Preline" anywhere alongside a line-list
     # token. Guarded so it cannot swallow the plain
     # "Line List (Apparel & Accessories)" file, whose text has no "app acc".
@@ -463,7 +508,10 @@ def _extract_principal(key: str) -> str | None:
 
 
 # These NB trigger types use the new Brand Mapping file instead of the v6 Attributes List.
-_NB_NEW_MAPPING_TRIGGER_TYPES: set[str] = {"linelist_footwear_gtm", "linelist_appacc_preline"}
+_NB_NEW_MAPPING_TRIGGER_TYPES: set[str] = {
+    "linelist_footwear_gtm", "linelist_appacc_preline",
+    "sample_footwear", "sample_apparel", "sample_accessories",
+}
 
 
 def _list_principal_files(bucket: str, principal: str, triggered_ftype: str | None = None) -> dict[str, dict]:
@@ -560,7 +608,8 @@ def _check_mandatory_files(found: dict[str, dict], triggered_ftype: str | None) 
     # Generic fallback
     missing = list(REQUIRED_NON_LINELIST_TYPES - set(found.keys()))
     has_any_brand_file = any(
-        k in found for k in ("linelist_apparel", "linelist_footwear",
+        k in found for k in ("sample_apparel", "sample_accessories", "sample_footwear",
+                            "linelist_apparel", "linelist_footwear",
                             "linelist_footwear_gtm", "linelist_appacc_preline",
                             "linelist_licensed", "ecommerce_licensed",
                             "ecommerce_inline", "linelist","ean_source","ordersheet_licensed")  # ← replace "ecommerce"
@@ -599,6 +648,9 @@ def _prepare_tmp_dirs() -> dict[str, Path]:
         "attributes":         base / "input" / "attributes",
         "ean_source": base / "input" / "ean_source",
         "ordersheet_licensed":  base / "input" / "ordersheet_licensed",
+        "sample_footwear":      base / "input" / "sample_footwear",
+        "sample_apparel":       base / "input" / "sample_apparel",
+        "sample_accessories":   base / "input" / "sample_accessories",
     }
     for d in dirs.values():
         d.mkdir(parents=True, exist_ok=True)
@@ -691,6 +743,16 @@ def _parse_season_from_header(header: str) -> str | None:
 
     # GTM line-sheet title style: "S2'27 APAC Footwear GTM 2 Line Sheet"
     m = re.search(r"\b([SF])2['\u2019](\d{2})\b", header, re.IGNORECASE)
+    if m:
+        prefix = "SS" if m.group(1).upper() == "S" else "FW"
+        return f"{prefix}{m.group(2)}"
+
+    # NB sample-breakout title style: "S1'27", "S1 27", "S127"
+    # (S + drop number + 2-digit year; S→SS, F→FW — same convention the
+    # S2'27 GTM rule above uses). Covers the workbook title row AND the
+    # filename stem, which is what the SMS Election file falls back to
+    # (its first sheet has no usable title text).
+    m = re.search(r"\b([SF])\d['\u2019\s]?(\d{2})\b", header, re.IGNORECASE)
     if m:
         prefix = "SS" if m.group(1).upper() == "S" else "FW"
         return f"{prefix}{m.group(2)}"
@@ -1010,7 +1072,8 @@ def lambda_handler(event, context, auditor=None):
     #        Priority: linelist_apparel > linelist_footwear >
     #                  linelist_licensed > ecommerce
     if etl_module is None:
-        for candidate in ("linelist_apparel", "linelist_footwear",
+        for candidate in ("sample_apparel", "sample_accessories", "sample_footwear",
+                  "linelist_apparel", "linelist_footwear",
                   "linelist_footwear_gtm", "linelist_appacc_preline",
                   "linelist_licensed", "ecommerce_licensed",
                   "ecommerce_inline","ean_source","ordersheet_licensed"):
@@ -1132,7 +1195,8 @@ def lambda_handler(event, context, auditor=None):
     meta_filename = found.get(meta_ftype, {}).get("filename")
 
     if not meta_filename:
-        for candidate in ("linelist_apparel", "linelist_footwear",
+        for candidate in ("sample_apparel", "sample_accessories", "sample_footwear",
+                  "linelist_apparel", "linelist_footwear",
                   "linelist_footwear_gtm", "linelist_appacc_preline",
                   "linelist_licensed", "ecommerce_licensed",
                   "ecommerce_inline",  "linelist","ean_source","ordersheet_licensed"):

@@ -1,0 +1,1152 @@
+"""
+╔══════════════════════════════════════════════════════════════════════╗
+║  STIBO INBOUND XML GENERATOR — NEW BALANCE (Sample / Footwear) v1.0  ║
+║  Footwear Initial SMS Election → Stibo STEP XML                     ║
+╚══════════════════════════════════════════════════════════════════════╝
+
+Source file  : "S1 27 Footwear Initial SMS Election_2025.12.29 - MAP 010526.xlsx"
+Primary tab  : FIRST VISIBLE sheet — "Adult Initial SMS Order"
+               (header row located dynamically by scanning for "Item Number",
+                data starts on the row after the header)
+Input folder : /tmp/stibo_workdir/input/sample_footwear/
+
+MAPPING AUTHORITY (two sheets, cross-checked column-by-column):
+  1. "Attributes List_complete_v6_25032026.xlsx" → sheet "NEW BALANCE - SAMPLE"
+  2. "NEW - Brand mapping files Template.xlsx"   → sheet "NEW BALANCE SAMPLE"
+  3. "Master Data Dictionary (MAA).xlsx"         → Core Attributes + LOV sheets
+
+────────────────────────────────────────────────────────────────────────
+THE "SAMPLE" TYPE — KEY BUSINESS RULE (per user + mapping sheets)
+────────────────────────────────────────────────────────────────────────
+New Balance "Sample" articles are inline-category templates whose generic
+article codes carry the literal prefix "S" when ingested into Stibo:
+
+    AT_PrincipalStyleCode   = "S" + <Item Number>            (BM row 14:
+                              Mapping Logic = "S" + Principal Style Code)
+    AT_SAPStyleCode         = "S" + up to 8 chars of style   (BM row 23 / v6 R035)
+    AT_Generic              = "NEW" + "S" + up to 8 chars    (BM row 24 / v6 R036)
+    AT_Variant              = AT_Generic + SAP color(3) + SAP size(3)
+                              (BM row 26 / v6 R038)
+    KEY_InboundArticle /
+    AT_InboundGenericCode   = "NEW" + "S" + <Item Number>    (row-unique —
+                              repo convention, keeps KEY 1:1 with a source row)
+
+────────────────────────────────────────────────────────────────────────
+COLUMN → ATTRIBUTE MAP (footwear sheet — every mapped column)
+────────────────────────────────────────────────────────────────────────
+  Item Number          → AT_PrincipalStyleCode      (+"S" prefix)   [v6 R026]
+                        → AT_PrincipalStyleDescription (fallback when
+                          Product Display Name is blank)             [v6 R027]
+                        → AT_SAPStyleCode / AT_Generic / AT_Variant base
+                        → KEY_InboundArticle / AT_InboundGenericCode
+  Product Display Name → AT_PrincipalStyleDescription               [v6 R027]
+                        → <Name>  (blank → Item Number fallback)
+  NRF Color            → AT_PrincipalColorName                     [v6 R029]
+  Size Profile         → AT_PrincipalGenderDescription             [v6 R031]
+                        → AT_Gender   (SAP Gender LOV)              [v6 R051]
+                        → AT_SAPAge   (SAP Age LOV)                 [v6 R050]
+  Line Plan Business   → AT_PrincipalMerchandiseHierarchyL2         [v6 R092]
+
+  Footwear defaults (no source column — v6 "NEW BALANCE - SAMPLE"):
+    Country of Origin     → AT_CountryOrigin = CN / China           [v6 R054]
+    Merch Hierarchy L1    → "Footwear"                              [v6 R091]
+    SAP Color             → AT_Color = 000 / NO COLOR               [v6 R040]
+    SAP Size              → AT_Size  = 0SS / SS                     [v6 R041]
+
+────────────────────────────────────────────────────────────────────────
+COLUMNS READ BUT *NOT* MAPPED TO STIBO (per the two SAMPLE mapping sheets)
+────────────────────────────────────────────────────────────────────────
+  Intro Period, FlexPLM Season Name, Item Code/Color ID, Item - CarryOver/New,
+  Dev Site, GBU, Primary Reporting, Segment, Sub-Segment, Product Developer,
+  Product Manager, Series, Product Code/Sequence ID, Product Number,
+  Closure Type, SMU Type, Sales Sample Direction, Global Size Offering,
+  Size Range, Ready for LE, D365 status columns, EMEA Label Code,
+  Item Development Status, Line CFM Status, Actual/Target CFM Date,
+  In-Plan columns, Region Sales Sample Set columns, Target FCA, Final Target,
+  Concat, and ALL per-country sample-quantity columns (Australia … Japan,
+  APAC Merch Comments). None of these appear as a "Field Name in the Brand
+  File" for any attribute row in the two SAMPLE mapping sheets, so they are
+  deliberately not emitted.
+
+────────────────────────────────────────────────────────────────────────
+DEVIATIONS (documented, deliberate)
+────────────────────────────────────────────────────────────────────────
+ 1. SHEET SCOPE — the Brand Mapping sheet says "All Sheet except Summary",
+    but the operator instruction for this pipeline is explicit: ingest the
+    FIRST VISIBLE sheet only ("Adult Initial SMS Order"). Default
+    SHEET_MODE = "first_visible". Switch to "all_data_sheets" (module
+    constant) to also process "Kids Initial SMS Order" — its header is
+    located by the same dynamic scan, so both modes are supported.
+ 2. AT_BYArticleType is emitted as the constant ID="Inline" for every row
+    (v6 R106 / BM row 94: "Article Type — Default : Inline"), even though
+    the App/Acc breakout sheets carry a "Channel Type" column. The SAMPLE
+    spec pins the default; it does not read Channel Type.
+ 3. SAP Style/Generic/Variant codes ARE emitted with formula-computed
+    values (v6 R035-R039 mandate them for the sample flow). Some other
+    brand modules drop them ("Handled by Stibo internally") — if MAA later
+    asks for that here, delete the four _val() calls flagged
+    [SAP-COMPUTED] in _add_generic_values().
+ 4. "SPL + Season" note on v6 R027 (Principal Style Description) is not
+    applied — the sheet's own primary rule (Column "Product Display Name",
+    blank → Item Number) is implemented instead, exactly like every other
+    NB inline ETL in this repository.
+"""
+
+import re
+import os
+import sys
+import logging
+import argparse
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from datetime import datetime
+from pathlib import Path
+from xml.etree import ElementTree as ET
+
+import openpyxl
+import pandas as pd
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Base directory — overridden by Lambda via LAMBDA_TMP_DIR env var
+# ─────────────────────────────────────────────────────────────────────────────
+BASE_DIR = Path(os.environ.get("LAMBDA_TMP_DIR", str(Path(__file__).parent)))
+
+INPUT_DIR    = BASE_DIR / "input"
+SAMPLE_DIR   = INPUT_DIR / "sample_footwear"
+MDD_DIR      = INPUT_DIR / "mdd"
+ATTR_DIR     = INPUT_DIR / "attributes"
+
+OUTPUT_DIR  = BASE_DIR / "output"
+XML_OUT_DIR = OUTPUT_DIR / "xml"
+LOG_DIR     = OUTPUT_DIR / "logs"
+
+for d in [SAMPLE_DIR, MDD_DIR, ATTR_DIR, XML_OUT_DIR, LOG_DIR]:
+    d.mkdir(parents=True, exist_ok=True)
+
+log_path = LOG_DIR / f"run_nb_sample_footwear_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(message)s",
+    handlers=[
+        logging.FileHandler(log_path),
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+log = logging.getLogger(__name__)
+
+
+# ══════════════════════════════════════════════════════════════════
+# SHEET SCOPE — see DEVIATION 1 in the module docstring
+# ══════════════════════════════════════════════════════════════════
+SHEET_MODE = "first_visible"        # operator instruction (default)
+# SHEET_MODE = "all_data_sheets"    # Brand Mapping sheet wording
+SUMMARY_SHEET_KEYWORDS = ("summary",)   # never ingested in any mode
+
+
+# ══════════════════════════════════════════════════════════════════
+# SOURCE COLUMN CONTRACT — every column this ETL reads
+# ══════════════════════════════════════════════════════════════════
+SOURCE_COLUMNS: dict[str, list[str]] = {
+    "Item Number":          ["AT_PrincipalStyleCode", "AT_PrincipalStyleDescription",
+                             "AT_SAPStyleCode", "AT_Generic", "AT_Variant",
+                             "AT_InboundGenericCode"],
+    "Product Display Name": ["AT_PrincipalStyleDescription", "<Name>"],
+    "NRF Color":            ["AT_PrincipalColorName"],
+    "Size Profile":         ["AT_PrincipalGenderDescription",
+                             "AT_Gender", "AT_SAPAge"],
+    "Line Plan Business":   ["AT_PrincipalMerchandiseHierarchyL2"],
+    "GBU":                  [],   # read for logging/QA only — no attribute
+}
+
+
+# ══════════════════════════════════════════════════════════════════
+# LOV TABLES  (IDs resolved against the MDD; hard-coded fallbacks match
+#              the MDD LOV sheets — same convention as every NB ETL)
+# ══════════════════════════════════════════════════════════════════
+
+LOV_BRAND = {
+    "ADI": "ADIDAS", "NIK": "NIKE", "NEW": "NEW BALANCE",
+    "SMI": "SMIGGLE", "ALD": "ALDO", "CRO": "CROCS",
+    "LOT": "LOTTO",   "BIR": "BIRKENSTOCK",
+}
+
+# MDD "Gender LOV" / master "SAP Gender" — value → ID
+LOV_GENDER = {"Male": "M", "Female": "F", "Unisex": "U"}
+
+# MDD "Age LOV" / master "SAP Age" — value → ID
+LOV_AGE = {"Adults": "AD", "Children": "CH", "All Ages": "AA"}
+
+# MDD "Season LOV" — code → season name
+LOV_SEASON = {
+    "SP": "Spring",        "SM": "Summer",       "FL": "Fall",
+    "WN": "Winter",        "CO": "Core",         "SS": "Spring-Summer",
+    "FW": "Fall-Winter",   "AL": "All Season",
+}
+
+LOV_COMPANY_CODE = {
+    "0888": "PT. Map Aktif Adiperkasa",
+    "0886": "PT. MAP FTL Adiperkasa",
+    "0882": "Magna Management Asia",
+}
+LOV_SBU = {
+    "SP": "Sports", "FQ": "Footlocker", "FL": "Fashion Footwear",
+    "FW": "Footwear", "AP": "Apparel", "AC": "Accessories",
+}
+
+# MDD "Article Category LOV" — code → name (1 = Generic, per v6 R097 default)
+LOV_SAP_ARTICLE_CATEGORY = {
+    "1": "Generic", "0": "Single", "2": "Variant",
+    "10": "Sell set (Hampers)", "11": "Prepack (Musical Box)",
+}
+
+# MDD "BY Article Type" — code → name
+LOV_BY_ARTICLE_TYPE = {
+    "Inline": "Inline", "License": "License", "SSE": "SSE",
+}
+
+# MDD "Nature of Article LOV" — SMP = Sample (v6 R105 default)
+LOV_NATURE_OF_ARTICLE = {
+    "SMP": "Sample",
+}
+
+# MDD "Material LOV" / master "Material Type" — ZINA = Intercompany Articles
+# (v6 R096 "Material Type — Intercompany")
+MATERIAL_TYPE_ID = "ZINA"
+
+# MDD "SAP Product Flag LOV" — Intercompany = A (v6 R090 default)
+SAP_PRODUCT_FLAG_INTERCOMPANY = ("A", "Intercompany")
+
+# MDD "UOM LOV" — EA = Each (v6 R103 default)
+UOM_EACH = ("EA", "Each")
+
+# ── Size Profile → SAP Gender code  (v6 R051 footwear mapping, verbatim) ────
+#   Preschool/Boys/Grade/Gradeschool/Infant/Youth/Girls = Unisex
+#   Women = Female, Men = Male
+LOV_SIZE_PROFILE_TO_GENDER: dict[str, str] = {
+    "MENS":       "M", "WOMENS":     "F", "UNISEX":     "U",
+    "PRESCHOOL":  "U", "BOYS":       "U", "GRADE":      "U",
+    "GRADESCHOOL": "U", "INFANT":    "U", "YOUTH":      "U",
+    "GIRLS":      "U",
+}
+
+# ── Size Profile → SAP Age code  (v6 R050 footwear mapping, verbatim) ───────
+#   Mens/Unisex/Womens = Adults ; Preschool/Boys/Grade/Gradeschool/
+#   Infant/Youth/Girls = Children
+LOV_SIZE_PROFILE_TO_AGE: dict[str, str] = {
+    "MENS":       "AD", "WOMENS":     "AD", "UNISEX":    "AD",
+    "PRESCHOOL":  "CH", "BOYS":       "CH", "GRADE":     "CH",
+    "GRADESCHOOL": "CH", "INFANT":    "CH", "YOUTH":     "CH",
+    "GIRLS":      "CH",
+}
+
+# Gender code → MDD Gender LOV display name (label used in descriptions)
+GENDER_CODE_TO_LABEL = {"M": "MALE", "F": "FEMALE", "U": "UNISEX"}
+
+# ── Footwear fixed values (no source column) ────────────────────────────────
+FW_COO_DEFAULT       = ("CN", "China")          # v6 R054: Ftw default China
+FW_SAP_COLOR_DEFAULT = ("000", "NO COLOR")      # v6 R040: Ftw default 000
+FW_MERCH_L1_DEFAULT  = "Footwear"               # v6 R091: Ftw default footwear
+SAP_SIZE_SS          = ("0SS", "SS")            # v6 R041: default SS (MDD SAP Size LOV: SS → 0SS)
+
+# MDD AT_Generic / AT_Variant / description length limits
+MAX_GENERIC_LEN           = 12   # 3 brand + 1 "S" + 8 style
+MAX_VARIANT_LEN           = 18   # generic + 3 color + 3 size
+MAX_GENERIC_DESC_LEN      = 40
+MAX_VARIANT_DESC_LEN      = 40
+MAX_GENDER_DESC_CHARS     = 10   # MDD AT_PrincipalGenderDescription
+
+DIVISION = "Footwear"   # fixed by file type → PPH parent letter "F"
+
+DIVISION_PARENT_MAP: dict[str, str] = {
+    "ACCESSORIES": "E", "FOOTWEAR": "F", "APPAREL": "A",
+    "EQUIPMENT":   "Q", "TOYS":     "T",
+}
+
+STIBO_NS     = "http://www.stibosystems.com/step"
+STIBO_XSI    = "http://www.w3.org/2001/XMLSchema-instance"
+STIBO_SCHEMA = "http://www.stibosystems.com/step PIM.xsd"
+
+_XMLNS_RE = re.compile(r'\s+xmlns="[^"]*"')
+
+
+# ══════════════════════════════════════════════════════════════════
+# SECTION 1 — LOADERS
+# ══════════════════════════════════════════════════════════════════
+
+class MDDLoader:
+    """Master Data Dictionary loader — same contract as every NB ETL."""
+
+    def __init__(self, path: Path):
+        self.path       = path
+        self.attributes: dict[str, dict] = {}
+        self.lovs:       dict[str, dict] = {}
+        self._load()
+
+    def _load(self):
+        log.info("[MDD] Loading: %s", self.path.name)
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            wb = openpyxl.load_workbook(self.path, read_only=True, data_only=True)
+
+        ws   = wb["Core Attributes"]
+        rows = list(ws.iter_rows(values_only=True))
+        hdr  = rows[1]
+        col: dict[str, int] = {}
+        for i, h in enumerate(hdr):
+            if h:
+                col[str(h).split("\n")[0].strip()] = i
+                col[str(h).strip()] = i
+
+        for row in rows[2:]:
+            aid = row[7] if len(row) > 7 else None
+            if not aid:
+                continue
+            aid = str(aid).strip()
+
+            def _v(key):
+                idx = col.get(key)
+                if idx is None or idx >= len(row):
+                    return None
+                v = row[idx]
+                return str(v).strip() if v else None
+
+            self.attributes[aid] = {
+                "id":           aid,
+                "name":         _v("PIM Attribute Name"),
+                "source_name":  _v("Source Attribute Name"),
+                "cardinality":  _v("Mandatory"),
+                "validation":   _v("Validation Base Type"),
+                "multi_valued": _v("Multi Valued"),
+                "lov_name":     _v("Name of LOV"),
+                "max_chars":    _v("Max Characters"),
+                "group":        _v("PIM Attribute Group"),
+            }
+
+        self._load_simple_lovs(wb)
+        self._load_named_lov_sheets(wb)
+        wb.close()
+        log.info("[MDD] %d attributes | %d LOVs", len(self.attributes), len(self.lovs))
+
+    def _load_simple_lovs(self, wb):
+        if "Simple LOVs" not in wb.sheetnames:
+            return
+        for row in list(wb["Simple LOVs"].iter_rows(values_only=True))[1:]:
+            lov_name, _, val_name, val_id = (row + (None,) * 4)[:4]
+            if lov_name and val_name:
+                self.lovs.setdefault(str(lov_name).strip(), {})[str(val_name).strip()] = (
+                    str(val_id).strip() if val_id else str(val_name).strip()
+                )
+
+    def _load_named_lov_sheets(self, wb):
+        for sn in wb.sheetnames:
+            if "LOV" not in sn.upper():
+                continue
+            rows = list(wb[sn].iter_rows(values_only=True))
+            if len(rows) < 2:
+                continue
+            display = sn.replace(" LOV", "").replace("LOV ", "").strip()
+            for row in rows[1:]:
+                if not row or len(row) < 2:
+                    continue
+                code, name = row[0], row[1]
+                if name:
+                    self.lovs.setdefault(display, {})[str(name).strip()] = (
+                        str(code).strip() if code else str(name).strip()
+                    )
+
+    def max_chars(self, attr_id: str, default: int = 0) -> int:
+        raw = (self.attributes.get(attr_id, {}) or {}).get("max_chars") or ""
+        digits = re.sub(r"[^\d]", "", str(raw).split("\n")[0]) if raw else ""
+        try:
+            return int(digits) if digits else default
+        except ValueError:
+            return default
+
+
+class BrandMappingSampleLoader:
+    """
+    Parses the "NEW BALANCE SAMPLE" sheet of the NEW Brand Mapping file.
+
+    The ETL's attribute mapping is hard-coded from that sheet (repo
+    convention — same as GTM / Preline), but the loader lets the module
+    SELF-CHECK at runtime that every attribute ID it emits is declared in
+    the live mapping sheet. Undeclared IDs are logged as warnings so a
+    mapping-sheet revision surfaces immediately instead of silently
+    diverging.
+    """
+
+    SHEET_NAME = "NEW BALANCE SAMPLE"
+
+    def __init__(self, path: Path):
+        self.path  = path
+        self.sheet = self.SHEET_NAME
+        self.declared_ids: set[str] = set()
+        self.rows: list[dict] = []
+        self._load()
+
+    def _load(self):
+        log.info("[BrandMapping] Loading: %s → sheet '%s'", self.path.name, self.SHEET_NAME)
+        wb = openpyxl.load_workbook(self.path, read_only=True, data_only=True)
+        if self.SHEET_NAME not in wb.sheetnames:
+            log.warning(
+                "[BrandMapping] Sheet '%s' not found in %s — self-check disabled "
+                "(available: %s)", self.SHEET_NAME, self.path.name, wb.sheetnames[:8],
+            )
+            wb.close()
+            return
+        ws   = wb[self.SHEET_NAME]
+        rows = list(ws.iter_rows(values_only=True))
+        hdr_idx = next(
+            (i for i, r in enumerate(rows[:5])
+             if r and r[1] is not None and str(r[1]).strip() == "Stibo Attribute ID"),
+            1,
+        )
+        for row in rows[hdr_idx + 1:]:
+            if not row or len(row) < 2:
+                continue
+            attr_id = row[1]
+            if attr_id is None:
+                continue
+            attr_id = str(attr_id).strip()
+            if not attr_id or attr_id.startswith("#"):
+                continue
+            self.declared_ids.add(attr_id)
+            self.rows.append({
+                "attribute": str(row[0]).strip() if row[0] else "",
+                "id":        attr_id,
+                "validation": str(row[2]).strip() if len(row) > 2 and row[2] else "",
+            })
+        wb.close()
+        log.info("[BrandMapping] %d attribute IDs declared in '%s'", len(self.declared_ids), self.SHEET_NAME)
+
+
+class FootwearSMSLoader:
+    """
+    Loads the New Balance Footwear Initial SMS Election workbook.
+
+    Sheet selection (see SHEET_MODE / DEVIATION 1):
+      * "first_visible"  → the first visible sheet ("Adult Initial SMS Order")
+      * "all_data_sheets"→ every visible sheet whose name is not a Summary
+                           tab (Adult + Kids), each with its own header scan.
+
+    The header row is located dynamically by scanning for a row that
+    contains "Item Number" — the sheet carries two junk rows above it
+    (a sparse marker row and a hidden summary-count row).
+    """
+
+    ROW_KEY = "Item Number"
+
+    def __init__(self, path: Path, sheet_mode: str = SHEET_MODE):
+        self.path   = path
+        self.mode   = sheet_mode
+        self.frames: list[pd.DataFrame] = []
+        self.sheets: list[str] = []
+        self._load()
+
+    def _load(self):
+        log.info("[Sample-FW] Loading: %s", self.path.name)
+        wb = openpyxl.load_workbook(self.path, read_only=True, data_only=True)
+
+        visible = [sn for sn in wb.sheetnames if wb[sn].sheet_state == "visible"]
+        if self.mode == "all_data_sheets":
+            targets = [
+                sn for sn in visible
+                if not any(k in sn.lower() for k in SUMMARY_SHEET_KEYWORDS)
+            ]
+        else:
+            targets = visible[:1]     # first visible sheet only
+
+        for target in targets:
+            ws   = wb[target]
+            rows = list(ws.iter_rows(values_only=True))
+
+            hdr_idx = next(
+                (i for i, r in enumerate(rows)
+                 if any(str(v).strip() == self.ROW_KEY for v in r if v is not None)),
+                None,
+            )
+            if hdr_idx is None:
+                log.warning("[Sample-FW] No '%s' header row in sheet '%s' — skipping.",
+                            self.ROW_KEY, target)
+                continue
+
+            log.info("[Sample-FW] Sheet '%s': header at row index %d (row %d)",
+                     target, hdr_idx, hdr_idx + 1)
+            header = [
+                str(h).replace("\n", " ").strip() if h is not None else f"col_{i}"
+                for i, h in enumerate(rows[hdr_idx])
+            ]
+            df = pd.DataFrame(rows[hdr_idx + 1:], columns=header)
+            df["_ExcelRow"] = range(hdr_idx + 2, hdr_idx + 2 + len(df))
+            df["_Sheet"]    = target
+
+            key_col = next(
+                (c for c in (self.ROW_KEY, "Item No.", "Item No") if c in df.columns), None
+            )
+            if key_col:
+                df = df[
+                    df[key_col].notna()
+                    & (df[key_col] != "")
+                    & (df[key_col] != 0)
+                    & (~df[key_col].astype(str).str.strip().isin(["", "None", "nan"]))
+                ]
+
+            self.frames.append(df.reset_index(drop=True))
+            self.sheets.append(target)
+
+        wb.close()
+
+        missing = [c for c in SOURCE_COLUMNS if c not in (self.frames[0].columns if self.frames else [])]
+        if missing:
+            log.warning("[Sample-FW] Expected source column(s) absent: %s", missing)
+
+        total = sum(len(f) for f in self.frames)
+        log.info("[Sample-FW] %d SKU row(s) loaded from sheet(s): %s", total, self.sheets)
+
+
+# ══════════════════════════════════════════════════════════════════
+# SECTION 2 — MAPPER
+# ══════════════════════════════════════════════════════════════════
+
+def _s(v) -> str:
+    if v is None:
+        return ""
+    s = str(v).strip()
+    return "" if s in ("None", "nan", "N/A") else s
+
+
+def _clean(code: str) -> str:
+    """Alphanumeric-only, upper-cased (used for SAP-side codes)."""
+    return re.sub(r"[^A-Z0-9]", "", (code or "").upper())
+
+
+def _size_profile_to_gender_code(size_profile: str) -> str:
+    """v6 R051 footwear mapping. Unmapped values default to Unisex."""
+    return LOV_SIZE_PROFILE_TO_GENDER.get(size_profile.upper().strip(), "U")
+
+
+def _size_profile_to_age_code(size_profile: str) -> str:
+    """v6 R050 footwear mapping. Unmapped values default to Adults."""
+    return LOV_SIZE_PROFILE_TO_AGE.get(size_profile.upper().strip(), "AD")
+
+
+# ── THE SAMPLE "S" PREFIX ────────────────────────────────────────────────────
+def _sample_prefix(style_code: str) -> str:
+    """BM row 14 Mapping Logic: '"S" + Principal Style Code'."""
+    return f"S{(style_code or '').strip()}"
+
+
+def _build_sap_style_code(item_number: str) -> str:
+    """
+    BM row 23 / v6 R035 (Footwear): Prefix S + up to 8 chars of the
+    Principal Style Code.
+    """
+    return f"S{_clean(item_number)[:8]}"
+
+
+def _build_generic_code(brand_code: str, item_number: str) -> str:
+    """
+    BM row 24 / v6 R036 (Footwear): 3-digit brand code + prefix "S" +
+    up to 8 chars Principal Style Code (max 12).
+    """
+    brand = _clean(brand_code)[:3]
+    return f"{brand}S{_clean(item_number)[:8]}"[:MAX_GENERIC_LEN]
+
+
+def _build_variant_code(generic_code: str, sap_color_id: str, sap_size_id: str) -> str:
+    """
+    BM row 26 / v6 R038 (Footwear): Generic + 3-digit SAP color code +
+    3-digit SAP size code (max 18).
+    """
+    return f"{generic_code}{(sap_color_id or '')}{(sap_size_id or '')}"[:MAX_VARIANT_LEN]
+
+
+def _build_generic_description(
+    brand_code: str, principal_style_code: str,
+    gender_code: str, sap_color_name: str,
+) -> str:
+    """
+    BM row 25 / v6 R037: MAA Generic Description Mapping —
+    max 40 chars: 3-digit brand code + Principal style + (Age/Gender) + Color.
+    Same formula astec/recap_main.py implements for the identical rule text.
+    """
+    parts = (
+        _clean(brand_code)[:3],
+        (principal_style_code or "").strip().upper(),
+        GENDER_CODE_TO_LABEL.get(gender_code, ""),
+        (sap_color_name or "").strip().upper(),
+    )
+    return " ".join(p for p in parts if p)[:MAX_GENERIC_DESC_LEN]
+
+
+def _build_variant_description(generic_desc: str, sap_size_name: str) -> str:
+    """BM row 27 / v6 R039: generic description + Size, max 40 chars."""
+    return f"{generic_desc} {(sap_size_name or '').strip().upper()}".strip()[:MAX_VARIANT_DESC_LEN]
+
+
+def _build_inbound_key(brand_code: str, item_number: str) -> str:
+    """
+    KEY_InboundArticle / AT_InboundGenericCode — repo convention
+    (every NB ETL keys the generic article 1:1 with a source row), carrying
+    the sample "S" prefix:  brand(3) + "S" + <row-unique Item Number>.
+    """
+    brand = _clean(brand_code)[:3]
+    return f"{brand}S{_clean(item_number)}"
+
+
+def map_sku(row: pd.Series, brand_code: str = "NEW") -> dict:
+    """Map one SMS Election row to a normalized sample-article dict."""
+    item_number    = _s(row.get("Item Number"))
+    display_name   = _s(row.get("Product Display Name"))
+    nrf_color      = _s(row.get("NRF Color"))
+    size_profile   = _s(row.get("Size Profile"))
+    line_plan_biz  = _s(row.get("Line Plan Business"))
+    gbu            = _s(row.get("GBU"))
+    excel_row      = row.get("_ExcelRow")
+    sheet_name     = row.get("_Sheet", "")
+
+    gender_code = _size_profile_to_gender_code(size_profile)
+    age_code    = _size_profile_to_age_code(size_profile)
+
+    # Footwear SAP-side fixed values (no source column)
+    coo_id, coo_name           = FW_COO_DEFAULT
+    sap_color_id, sap_color_nm = FW_SAP_COLOR_DEFAULT
+    sap_size_id,  sap_size_nm  = SAP_SIZE_SS
+
+    principal_style_code = _sample_prefix(item_number)     # "S" + Item Number
+    sap_style_code       = _build_sap_style_code(item_number)
+    generic_code         = _build_generic_code(brand_code, item_number)
+    variant_code         = _build_variant_code(generic_code, sap_color_id, sap_size_id)
+    generic_desc         = _build_generic_description(
+        brand_code, principal_style_code, gender_code, sap_color_nm,
+    )
+    variant_desc         = _build_variant_description(generic_desc, sap_size_nm)
+    inbound_key          = _build_inbound_key(brand_code, item_number)
+
+    return {
+        # ── source values ───────────────────────────────────────
+        "item_number":    item_number,
+        "display_name":   display_name,
+        "nrf_color":      nrf_color,
+        "size_profile":   size_profile,
+        "line_plan_biz":  line_plan_biz,
+        "gbu":            gbu,
+        "excel_row":      int(excel_row) if excel_row is not None else None,
+        "sheet_name":     sheet_name,
+        # ── derived / codes ─────────────────────────────────────
+        "brand_code":          brand_code,
+        "principal_style_code": principal_style_code,   # "S"+ItemNumber
+        "sap_style_code":      sap_style_code,          # "S"+style[:8]
+        "generic_code":        generic_code,            # NEW+S+style[:8]
+        "variant_code":        variant_code,            # generic+color+size
+        "generic_desc":        generic_desc,
+        "variant_desc":        variant_desc,
+        "inbound_key":         inbound_key,             # NEW+S+ItemNumber
+        # ── gender / age ────────────────────────────────────────
+        "gender_code":         gender_code,
+        "gender_label":        {v: k for k, v in LOV_GENDER.items()}.get(gender_code, "Unisex"),
+        "age_code":            age_code,
+        "age_label":           {v: k for k, v in LOV_AGE.items()}.get(age_code, "Adults"),
+        # ── footwear defaults ───────────────────────────────────
+        "coo_id":              coo_id,
+        "coo_name":            coo_name,
+        "sap_color_id":        sap_color_id,
+        "sap_color_name":      sap_color_nm,
+        "sap_size_id":         sap_size_id,
+        "sap_size_name":       sap_size_nm,
+        "merch_l1":            FW_MERCH_L1_DEFAULT,
+        # ── constants ───────────────────────────────────────────
+        "division":            DIVISION,
+        "art_category":        "1",                    # Generic
+        "article_type":        "Inline",               # v6 R106 default
+    }
+
+
+# ══════════════════════════════════════════════════════════════════
+# SECTION 3 — VALIDATOR
+# ══════════════════════════════════════════════════════════════════
+
+def validate(mapped: dict, mdd: MDDLoader) -> list[str]:
+    """Validates only the fields this ETL actually emits."""
+    warns = []
+    sku   = mapped["item_number"] or "<no item number>"
+
+    # Mandatory (per MDD cardinality) emitted attributes
+    field_to_at = {
+        "item_number":        "AT_PrincipalStyleCode",
+        "generic_code":       "AT_Generic",
+        "variant_code":       "AT_Variant",
+        "gender_code":        "AT_Gender",
+        "age_code":           "AT_SAPAge",
+        "brand_code":         "AT_Brand",
+        "sap_style_code":     "AT_SAPStyleCode",
+    }
+    for field, at_id in field_to_at.items():
+        meta = mdd.attributes.get(at_id, {}) if mdd else {}
+        card = (meta.get("cardinality") or "").lower() if meta else ""
+        val  = mapped.get(field, "")
+        if (not card or "mandatory" in card or "conditional" in card) and (
+            not val or str(val).strip() in ("", "None", "nan")
+        ):
+            warns.append(f"[{sku}] MISSING mandatory: {at_id}")
+
+    # Source-quality warnings (v6 notes)
+    if not mapped.get("display_name"):
+        warns.append(f"[{sku}] BLANK Product Display Name — Item Number fallback applied")
+    if not mapped.get("nrf_color"):
+        warns.append(f"[{sku}] BLANK NRF Color — AT_PrincipalColorName omitted")
+    if not mapped.get("line_plan_biz"):
+        warns.append(f"[{sku}] MISSING source value: Line Plan Business")
+    if not mapped.get("size_profile"):
+        warns.append(f"[{sku}] MISSING source value: Size Profile (gender/age defaulted)")
+
+    return warns
+
+
+# ══════════════════════════════════════════════════════════════════
+# SECTION 4 — XML BUILDER HELPERS
+# ══════════════════════════════════════════════════════════════════
+
+def _clean_xml_value(raw) -> str:
+    text = "" if raw is None else str(raw).strip()
+    return "" if text in ("", "None", "nan", "NaT") else text
+
+
+def _val(parent, attr_id, value="", id_val=""):
+    normalized_id    = _clean_xml_value(id_val)
+    normalized_value = _clean_xml_value(value)
+    if not normalized_id and not normalized_value:
+        return None
+
+    el = ET.SubElement(parent, f"{{{STIBO_NS}}}Value")
+    el.set("AttributeID", attr_id)
+    if normalized_id:
+        el.set("ID", normalized_id)
+        return el
+    el.text = normalized_value
+    return el
+
+
+def _multival(parent, attr_id, id_val, label=""):
+    mv = ET.SubElement(parent, f"{{{STIBO_NS}}}MultiValue")
+    mv.set("AttributeID", attr_id)
+    v = ET.SubElement(mv, f"{{{STIBO_NS}}}Value")
+    v.set("ID", id_val)
+    return mv
+
+
+def _lov(code, lookup, default=""):
+    code  = (code or "").strip()
+    label = lookup.get(code, default or code)
+    return code, label
+
+
+def _get_division_code(division: str) -> str:
+    div_upper = (division or "").strip().upper()
+    for key, code in DIVISION_PARENT_MAP.items():
+        if key in div_upper:
+            return code
+    return "F"
+
+
+# ══════════════════════════════════════════════════════════════════
+# SECTION 5 — GENERIC VALUE WRITER
+# ══════════════════════════════════════════════════════════════════
+
+EMITTED_ATTRIBUTE_IDS: list[str] = [
+    "AT_Country", "AT_CompanyCode", "AT_SBU", "AT_Brand", "AT_BrandGroup",
+    "AT_PrincipalStyleCode", "AT_PrincipalStyleDescription",
+    "AT_PrincipalColorName", "AT_PrincipalGenderDescription",
+    "AT_SAPStyleCode", "AT_Generic", "AT_GenericDescription",
+    "AT_Variant", "AT_VariantDescription",
+    "AT_Color", "AT_Size", "AT_Gender", "AT_SAPAge",
+    "AT_CountryOrigin", "AT_Season", "AT_SeasonYear",
+    "AT_PrincipalMerchandiseHierarchyL1", "AT_PrincipalMerchandiseHierarchyL2",
+    "AT_SAPArticleCategory", "AT_BYArticleType", "AT_NatureOfArticle",
+    "AT_MaterialType", "AT_SAPProductFlag", "AT_UOM",
+    "AT_EcomIndicator", "AT_MainVendorIdentification", "AT_ArticleStatus",
+    "AT_InboundGenericCode",
+]
+
+
+def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=None):
+    """
+    Writes exactly the attributes the two SAMPLE mapping sheets define as
+    populated for the footwear sample flow (see EMITTED_ATTRIBUTE_IDS).
+    Every other attribute row in those sheets is N/A / Manual input /
+    Smartsheet-only and is deliberately NOT emitted.
+    """
+    # ── Context (portal / filename metadata, not a source column) ──
+    sbu_code, sbu_label = _lov(sbu, LOV_SBU, sbu)
+    _multival(vals_el, "AT_SBU", sbu_code, sbu_label)
+
+    cc_label = LOV_COMPANY_CODE.get(comp_code, comp_code)
+    _multival(vals_el, "AT_CompanyCode", comp_code, cc_label)
+
+    b_code, b_label = _lov(art["brand_code"], LOV_BRAND, art["brand_code"])
+    _val(vals_el, "AT_Brand",      b_label, id_val=b_code)
+    _val(vals_el, "AT_BrandGroup", b_label, id_val=b_label)
+
+    # ── Principal style — THE SAMPLE "S" PREFIX (BM row 14) ────────
+    _val(vals_el, "AT_PrincipalStyleCode", art["principal_style_code"])
+    # v6 R027: Product Display Name, blank → Item Number
+    _val(vals_el, "AT_PrincipalStyleDescription",
+         art["display_name"] or art["item_number"])
+
+    # ── Color (footwear) ───────────────────────────────────────────
+    _val(vals_el, "AT_PrincipalColorName", art["nrf_color"])
+
+    # ── Gender / age (footwear — from Size Profile) ────────────────
+    gender_max = mdd.max_chars("AT_PrincipalGenderDescription", MAX_GENDER_DESC_CHARS) if mdd \
+        else MAX_GENDER_DESC_CHARS
+    _val(vals_el, "AT_PrincipalGenderDescription", art["size_profile"][:gender_max])
+    _val(vals_el, "AT_Gender", art["gender_label"], id_val=art["gender_code"])
+    _val(vals_el, "AT_SAPAge",  art["age_label"],  id_val=art["age_code"])
+
+    # ── SAP-computed codes [SAP-COMPUTED] (v6 R035-R039) ───────────
+    _val(vals_el, "AT_SAPStyleCode", art["sap_style_code"])
+    _val(vals_el, "AT_Generic",      art["generic_code"])
+    _val(vals_el, "AT_Variant",      art["variant_code"])
+    _val(vals_el, "AT_GenericDescription", art["generic_desc"])
+    _val(vals_el, "AT_VariantDescription",  art["variant_desc"])
+
+    # ── SAP color / size (footwear defaults) ───────────────────────
+    _val(vals_el, "AT_Color", art["sap_color_name"], id_val=art["sap_color_id"])
+    _val(vals_el, "AT_Size",  art["sap_size_name"],  id_val=art["sap_size_id"])
+
+    # ── Country of origin (footwear default) ───────────────────────
+    _val(vals_el, "AT_CountryOrigin", art["coo_name"], id_val=art["coo_id"])
+
+    # ── Season (from filename/portal metadata) ─────────────────────
+    sea_raw   = art.get("season", "") or ""
+    sea_code  = sea_raw[:2].upper() if len(sea_raw) >= 2 else sea_raw
+    sea_label = LOV_SEASON.get(sea_raw, LOV_SEASON.get(sea_code, sea_raw))
+    _val(vals_el, "AT_Season", sea_label, id_val=sea_code)
+
+    year_raw = sea_raw[2:] if len(sea_raw) > 2 else ""
+    year_val = f"20{year_raw}" if len(year_raw) == 2 else year_raw
+    _val(vals_el, "AT_SeasonYear", year_val)
+
+    # ── Merchandise hierarchy (footwear) ───────────────────────────
+    _val(vals_el, "AT_PrincipalMerchandiseHierarchyL1", art["merch_l1"])
+    _val(vals_el, "AT_PrincipalMerchandiseHierarchyL2", art.get("line_plan_biz", ""))
+
+    # ── Sample-flow constants (v6 "NEW BALANCE - SAMPLE") ──────────
+    cat_code  = art["art_category"]                       # "1" = Generic
+    cat_label = LOV_SAP_ARTICLE_CATEGORY.get(cat_code, "Generic")
+    _val(vals_el, "AT_SAPArticleCategory", cat_label, id_val=cat_code)
+
+    at_norm  = art["article_type"]                        # "Inline"
+    at_label = LOV_BY_ARTICLE_TYPE.get(at_norm, at_norm)
+    _val(vals_el, "AT_BYArticleType", at_label, id_val=at_norm)
+
+    noa_code = "SMP"                                      # Sample
+    noa_label = LOV_NATURE_OF_ARTICLE.get(noa_code, "Sample")
+    _val(vals_el, "AT_NatureOfArticle", noa_label, id_val=noa_code)
+
+    _val(vals_el, "AT_MaterialType", id_val=MATERIAL_TYPE_ID)          # ZINA
+
+    flag_id, flag_label = SAP_PRODUCT_FLAG_INTERCOMPANY               # A
+    _val(vals_el, "AT_SAPProductFlag", flag_label, id_val=flag_id)
+
+    uom_id, uom_label = UOM_EACH                                       # EA
+    _val(vals_el, "AT_UOM", uom_label, id_val=uom_id)
+
+    # v6 R025: Ecom Indicator — Manual input / Default : No
+    _val(vals_el, "AT_EcomIndicator", "No", id_val="N")
+
+    # v6 R056: Main Vendor Identification — Default "1"
+    _val(vals_el, "AT_MainVendorIdentification", "1")
+
+    # v6 R245: Article Status — Default when created: Active
+    # (no LOV sheet defines an ID for it — value text only)
+    _val(vals_el, "AT_ArticleStatus", "Active")
+
+    # ── Pipeline key (repo convention) ─────────────────────────────
+    _val(vals_el, "AT_InboundGenericCode", art["inbound_key"])
+
+    country_val = art.get("country_code", "")
+    if country_val:
+        _val(vals_el, "AT_Country", country_val, id_val=country_val)
+
+
+# ══════════════════════════════════════════════════════════════════
+# SECTION 6 — CLASSIFICATIONS
+# ══════════════════════════════════════════════════════════════════
+
+def build_classifications(brand, brand_code, season_code):
+    cls_root = ET.Element(f"{{{STIBO_NS}}}Classifications")
+    sea_prefix     = season_code[:2].upper() if len(season_code) >= 2 else season_code
+    sea_year_short = season_code[2:] if len(season_code) > 2 else ""
+    sea_year       = f"20{sea_year_short}" if len(sea_year_short) == 2 else sea_year_short
+    full_season_code = f"{sea_prefix}{sea_year}"
+    season_id        = f"CLH_{brand_code}_{full_season_code}"
+    batches_parent   = f"CLH_{brand.replace(' ', '')}Batches"
+    season_label_map = {   # MDD "Season LOV" names
+        "SP": "Spring",        "SM": "Summer",       "FL": "Fall",
+        "WN": "Winter",        "CO": "Core",         "SS": "Spring-Summer",
+        "FW": "Fall-Winter",   "AL": "All Season",   "AW": "Autumn-Winter",
+        "HO": "Holiday",
+    }
+    sea_name       = season_label_map.get(sea_prefix, sea_prefix)
+    season_display = f"{brand} {sea_name} {sea_year}".strip()
+    season_short   = f"{sea_prefix} {sea_year}".strip()
+
+    season_cls = ET.SubElement(cls_root, f"{{{STIBO_NS}}}Classification")
+    season_cls.set("ID", season_id)
+    season_cls.set("UserTypeID", "CLS_Season")
+    season_cls.set("ParentID", batches_parent)
+    ET.SubElement(season_cls, f"{{{STIBO_NS}}}Name").text = season_display
+
+    confirmed = ET.SubElement(season_cls, f"{{{STIBO_NS}}}Classification")
+    confirmed.set("ID", f"{season_id}CA")
+    confirmed.set("UserTypeID", "CLS_ConfirmedArticles")
+    ET.SubElement(confirmed, f"{{{STIBO_NS}}}Name").text = f"{season_short} Confirmed Articles"
+
+    unconfirmed = ET.SubElement(season_cls, f"{{{STIBO_NS}}}Classification")
+    unconfirmed.set("ID", f"{season_id}UA")
+    unconfirmed.set("UserTypeID", "CLS_UnconfirmedArticles")
+    ET.SubElement(unconfirmed, f"{{{STIBO_NS}}}Name").text = f"{season_short} Unconfirmed Articles"
+
+    return cls_root
+
+
+# ══════════════════════════════════════════════════════════════════
+# SECTION 7 — PRODUCT XML BUILDER
+# ══════════════════════════════════════════════════════════════════
+
+def build_product_xml(art, brand, brand_code, comp_code, sbu, season_id, mdd=None, bm=None):
+    item_number = art["item_number"]
+    if not item_number:
+        return ""
+
+    div_letter  = _get_division_code(art.get("division", DIVISION))
+    parent_id   = f"PPH_{div_letter}-TempSubCat"
+    key_generic = art["inbound_key"]
+
+    g_el = ET.Element(f"{{{STIBO_NS}}}Product")
+    g_el.set("UserTypeID", "PRD_GenericArticle")
+    g_el.set("ParentID",   parent_id)
+
+    kv = ET.SubElement(g_el, f"{{{STIBO_NS}}}KeyValue")
+    kv.set("KeyID", "KEY_InboundArticle")
+    kv.text = key_generic
+
+    # v6 R027: Product Display Name, blank → Item Number
+    ET.SubElement(g_el, f"{{{STIBO_NS}}}Name").text = (
+        art["display_name"] or item_number
+    )
+
+    cr_merch = ET.SubElement(g_el, f"{{{STIBO_NS}}}ClassificationReference")
+    cr_merch.set("ClassificationID", f"CLH_{brand.replace(' ', '')}Articles")
+    cr_merch.set("Type", "CPL_Merchandiser")
+
+    cr_unconf = ET.SubElement(g_el, f"{{{STIBO_NS}}}ClassificationReference")
+    cr_unconf.set("ClassificationID", f"{season_id}UA")
+    cr_unconf.set("Type", "CPL_UnConfirmedForSeason")
+
+    vals_el = ET.SubElement(g_el, f"{{{STIBO_NS}}}Values")
+    _add_generic_values(vals_el, art, brand, comp_code, sbu, mdd=mdd, bm=bm)
+
+    return ET.tostring(g_el, encoding="unicode")
+
+
+# ══════════════════════════════════════════════════════════════════
+# SECTION 8 — THREAD WORKER
+# ══════════════════════════════════════════════════════════════════
+
+def _process_sku(task):
+    row, brand_code, mdd = task
+    mapped = map_sku(row, brand_code=brand_code)
+    warns  = validate(mapped, mdd)
+    return mapped, warns
+
+
+# ══════════════════════════════════════════════════════════════════
+# SECTION 9 — ORCHESTRATOR
+# ══════════════════════════════════════════════════════════════════
+
+def run(args, auditor=None):
+    """
+    Entry point called by new_balance/lambda_function.py (or CLI).
+    args must have: brand, brand_code, comp_code, sbu, season, seq
+    """
+    def first(d: Path):
+        files = [f for pat in ("*.xlsx", "*.xlsm") for f in d.glob(pat)]
+        return files[0] if files else None
+
+    mdd_f  = first(MDD_DIR)
+    attr_f = first(ATTR_DIR)
+    sm_f   = first(SAMPLE_DIR)
+
+    for label, val in [
+        ("MDD",              mdd_f),
+        ("Attributes",       attr_f),
+        ("Footwear Sample",  sm_f),
+    ]:
+        if not val:
+            log.error("No %s file found — aborting.", label)
+            raise RuntimeError(f"Required input not found: {label}")
+
+    mdd = MDDLoader(mdd_f)
+    bm  = BrandMappingSampleLoader(attr_f)
+
+    # Self-check: every ID this module emits must be declared in the
+    # live "NEW BALANCE SAMPLE" sheet (see BrandMappingSampleLoader).
+    if bm.declared_ids:
+        undeclared = [a for a in EMITTED_ATTRIBUTE_IDS if a not in bm.declared_ids]
+        if undeclared:
+            log.warning(
+                "[BrandMapping SELF-CHECK] %d emitted attribute ID(s) not declared "
+                "in sheet '%s': %s — mapping sheet may have been revised.",
+                len(undeclared), bm.SHEET_NAME, undeclared,
+            )
+        else:
+            log.info("[BrandMapping SELF-CHECK] all %d emitted attribute IDs are "
+                     "declared in '%s'.", len(EMITTED_ATTRIBUTE_IDS), bm.SHEET_NAME)
+
+    all_warnings: list[str] = []
+
+    sea_prefix     = args.season[:2].upper() if len(args.season) >= 2 else args.season
+    sea_year_short = args.season[2:] if len(args.season) > 2 else ""
+    sea_year       = f"20{sea_year_short}" if len(sea_year_short) == 2 else sea_year_short
+    season_id      = f"CLH_{args.brand_code}_{sea_prefix}{sea_year}"
+
+    for sm_path in [sm_f]:
+        log.info("─── Processing Footwear SMS Sample file: %s ───", sm_path.name)
+
+        loader = FootwearSMSLoader(sm_path, sheet_mode=SHEET_MODE)
+        if not loader.frames:
+            log.warning("[Sample-FW] No data frames loaded — skipping file.")
+            continue
+
+        total_rows = sum(len(f) for f in loader.frames)
+        log.info("[Sample-FW] %d valid SKU row(s) to process", total_rows)
+
+        out_name = f"{sm_path.stem}.xml"
+        out_path = XML_OUT_DIR / out_name
+
+        log.info("Pass 1/2 — parallel map+validate (%d rows) …", total_rows)
+        mapped_skus: list[dict] = []
+        for df in loader.frames:
+            rows = [
+                row for _, row in df.iterrows()
+                if str(row.get("Item Number", "")).strip() not in ("", "None", "nan")
+            ]
+            num_workers = min(8, max(1, len(rows)))
+            task_args   = [(row, args.brand_code, mdd) for row in rows]
+            ordered: list[tuple[int, dict, list]] = []
+
+            with ThreadPoolExecutor(max_workers=num_workers) as pool:
+                futures = {pool.submit(_process_sku, t): i for i, t in enumerate(task_args)}
+                for fut in as_completed(futures):
+                    idx, (mapped, warns) = futures[fut], fut.result()
+                    mapped["season"]       = args.season
+                    mapped["country_code"] = getattr(args, "country_code", "")
+                    all_warnings.extend(warns)
+                    ordered.append((idx, mapped, warns))
+
+            ordered.sort(key=lambda x: x[0])
+            mapped_skus.extend(m for _, m, _ in ordered)
+            del ordered
+
+        # TEST LIMIT: restrict to specific 1-based Excel rows, e.g. {833, 844}
+        # TEST_ROWS = {833, 844}
+        # mapped_skus = [m for m in mapped_skus if m.get("excel_row") in TEST_ROWS]
+
+        # KEY_InboundArticle must stay 1:1 with source rows.
+        keys  = [m["inbound_key"] for m in mapped_skus if m.get("item_number")]
+        dupes = len(keys) - len(set(keys))
+        if dupes:
+            log.warning(
+                "[Sample-FW] %d duplicate KEY_InboundArticle value(s) — "
+                "articles will be merged in STEP.", dupes,
+            )
+            all_warnings.append(
+                f"[FILE {sm_path.name}] {dupes} duplicate KEY_InboundArticle values"
+            )
+
+        log.info("Pass 2/2 — streaming XML to %s …", out_name)
+        export_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cls_el  = build_classifications(args.brand, args.brand_code, args.season)
+        cls_str = _XMLNS_RE.sub("", ET.tostring(cls_el, encoding="unicode"))
+        del cls_el
+
+        written_count = 0
+        with open(out_path, "w", encoding="utf-8", buffering=1 << 20) as f:
+            f.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+            f.write(
+                f'<STEP-ProductInformation'
+                f' xmlns="{STIBO_NS}"'
+                f' xmlns:xsi="{STIBO_XSI}"'
+                f' xsi:schemaLocation="{STIBO_SCHEMA}"'
+                f' ExportTime="{export_time}"'
+                f' ExportContext="Context1"'
+                f' ContextID="Context1"'
+                f' WorkspaceID="Main"'
+                f' UseContextLocale="false">\n\n'
+            )
+            f.write(f"  {cls_str}\n\n")
+            del cls_str
+            f.write("  <Products>\n")
+            for art in mapped_skus:
+                if not art.get("item_number"):
+                    continue
+                product_xml = build_product_xml(
+                    art, args.brand, args.brand_code,
+                    args.comp_code, args.sbu, season_id, mdd=mdd, bm=bm,
+                )
+                product_xml = _XMLNS_RE.sub("", product_xml)
+                f.write(f"    {product_xml}\n")
+                del product_xml
+                written_count += 1
+            f.write("  </Products>\n")
+            f.write("</STEP-ProductInformation>\n")
+
+        del mapped_skus
+
+        file_kb = out_path.stat().st_size // 1024
+        log.info("✓ XML written → %s  (%dKB)", out_path, file_kb)
+
+        if auditor:
+            auditor.set_xml_uploads([str(out_path)])
+
+        print("═══ SKU SUMMARY ════════════════════════════════════", flush=True)
+        print(f"  Sample FW rows      : {total_rows}",    flush=True)
+        print(f"  Mapped SKUs         : {written_count}", flush=True)
+        print(f"  XML file size       : {file_kb}KB",     flush=True)
+        print("════════════════════════════════════════════════════", flush=True)
+
+    rpt_path = LOG_DIR / f"validation_nb_sample_footwear_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    with open(rpt_path, "w") as f:
+        f.write(f"Run: {datetime.now()}\nTotal warnings: {len(all_warnings)}\n\n")
+        f.write("\n".join(all_warnings) if all_warnings else "✓ No issues found.")
+        f.write("\n\nEmitted attribute IDs:\n")
+        f.write("\n".join(f"  {a}" for a in EMITTED_ATTRIBUTE_IDS))
+
+    if all_warnings:
+        log.warning("%d validation warnings → %s", len(all_warnings), rpt_path)
+    else:
+        log.info("✓ All SKUs passed validation → %s", rpt_path)
+
+
+# ══════════════════════════════════════════════════════════════════
+# SECTION 10 — CLI
+# ══════════════════════════════════════════════════════════════════
+
+def main():
+    p = argparse.ArgumentParser(
+        description="Stibo Inbound XML Generator — New Balance Sample (Footwear SMS) v1.0"
+    )
+    p.add_argument("--brand",        default="New Balance")
+    p.add_argument("--brand-code",   default="NEW")
+    p.add_argument("--comp-code",    default="0888")
+    p.add_argument("--sbu",          default="FW")
+    p.add_argument("--season",       default="SS27")
+    p.add_argument("--seq",          default=1, type=int)
+    p.add_argument("--country-code", default="")
+    run(p.parse_args())
+
+
+if __name__ == "__main__":
+    main()

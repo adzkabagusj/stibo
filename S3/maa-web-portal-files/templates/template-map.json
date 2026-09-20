@@ -211,6 +211,10 @@
       "Recap Sample 2nd Ingestion": {
         "file": "Recap_Sample_Lotto_2nd_Ingestion.xlsx",
         "sheet": "LOT"
+      },
+      "Recap Sample AI Ingestion": {
+        "file": "Recap_Sample_Lotto_AI_Ingestion.xlsx",
+        "sheet": "LOT"
       }
     }
   },

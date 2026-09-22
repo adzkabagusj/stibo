@@ -669,8 +669,16 @@ def _sku_first_char_to_gender_code(sku: str) -> str:
 
 # ── THE SAMPLE "S" PREFIX ────────────────────────────────────────────────────
 def _sample_prefix(sku: str) -> str:
-    """BM row 14 Mapping Logic: '"S" + Principal Style Code' (App col: SKU)."""
-    return f"S{(sku or '').strip()}"
+    """
+    BM row 14 Mapping Logic: '"S" + Principal Style Code' (App col: SKU).
+    Issue #6 (App/Acc): Remove suffix "_" + 3 digits after "_" from SKU
+    before prefixing with "S".
+    """
+    raw = (sku or '').strip()
+    # Strip the trailing "_XXX" colour suffix (e.g. MS51902_CAT → MS51902)
+    if '_' in raw:
+        raw = raw.rsplit('_', 1)[0]
+    return f"S{raw}"
 
 
 def _build_sap_style_code(sku: str, running_letter: str) -> str:
@@ -700,18 +708,23 @@ def _build_variant_code(generic_code: str, sap_color_id: str, sap_size_id: str) 
 
 
 def _build_generic_description(
-    brand_code: str, principal_style_code: str,
-    gender_code: str, sap_color_name: str,
+    brand_code: str, display_name: str,
+    age_code: str, gender_code: str, sap_color_name: str,
 ) -> str:
     """
     BM row 25 / v6 R037: MAA Generic Description Mapping —
     max 40 chars: 3-digit brand code + Principal style + (Age/Gender) + Color.
-    Same formula astec/recap_main.py and the FW sample ETL implement.
+
+    Issue #2 fix: "Principal style" now uses the Product Display Name
+    (not the SAP-style principal_style_code), and Age/Gender is rendered
+    in the parenthesised format (AgeCode/GenderCode) using the LOV codes
+    (e.g. AD/M, AD/U, CH/U).
     """
+    age_gender = f"({age_code}/{gender_code})" if age_code and gender_code else ""
     parts = (
         _clean(brand_code)[:3],
-        (principal_style_code or "").strip().upper(),
-        GENDER_CODE_TO_LABEL.get(gender_code, ""),
+        (display_name or "").strip(),
+        age_gender,
         (sap_color_name or "").strip().upper(),
     )
     return " ".join(p for p in parts if p)[:MAX_GENERIC_DESC_LEN]
@@ -764,7 +777,7 @@ def map_sku(row: pd.Series, brand_code: str = "NEW", mdd=None) -> dict:
     generic_code         = _build_generic_code(brand_code, sku, running_letter)
     variant_code         = _build_variant_code(generic_code, sap_color_id, sap_size_id)
     generic_desc         = _build_generic_description(
-        brand_code, principal_style_code, gender_code, sap_color_nm,
+        brand_code, display_name or sku, age_code, gender_code, sap_color_nm,
     )
     variant_desc         = _build_variant_description(generic_desc, sap_size_nm)
     inbound_key          = _build_inbound_key(brand_code, sku)
@@ -938,6 +951,9 @@ EMITTED_ATTRIBUTE_IDS: list[str] = [
     "AT_MaterialType", "AT_SAPProductFlag", "AT_UOM",
     "AT_EcomIndicator", "AT_MainVendorIdentification", "AT_ArticleStatus",
     "AT_InboundGenericCode",
+    "AT_PricingDistributionChannel",  # Issue #3 — Default: Retailer
+    "AT_MerchandiseCategory",                 # Issue #4 — Default: Sample
+    "AT_BYSubCategory",               # Issue #5 — Default: Sample
 ]
 
 
@@ -961,9 +977,11 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
 
     # ── Principal style — THE SAMPLE "S" PREFIX (BM row 14) ────────
     _val(vals_el, "AT_PrincipalStyleCode", art["principal_style_code"])
-    # v6 R027: Product Display Name, blank → SKU fallback
-    _val(vals_el, "AT_PrincipalStyleDescription",
-         art["display_name"] or art["sku"])
+    # Issue #1: v6 R027 notes — SPL + Season + Product Display Name
+    sea_for_desc = art.get("season", "") or ""
+    raw_desc     = art["display_name"] or art["sku"]
+    style_desc   = f"SPL {sea_for_desc} {raw_desc}".strip() if sea_for_desc else raw_desc
+    _val(vals_el, "AT_PrincipalStyleDescription", style_desc)
 
     # ── Principal colour (App/Acc — v6 R028 / R029) ────────────────
     _val(vals_el, "AT_PrincipalColorCode", art["color_code"][:MAX_PRINCIPAL_COLOR_CODE])
@@ -1039,6 +1057,15 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
 
     # ── Pipeline key (repo convention) ─────────────────────────────
     _val(vals_el, "AT_InboundGenericCode", art["inbound_key"])
+
+    # ── Issue #3: Pricing Distribution Channel — Default: Retailer ─
+    _val(vals_el, "AT_PricingDistributionChannel", "Retailer")
+
+    # ── Issue #4: MC Structure (Merchandise Category) — Default: Sample
+    _val(vals_el, "AT_MerchandiseCategory", "Sample")
+
+    # ── Issue #5: BY Sub Category — Default: Sample ────────────────
+    _val(vals_el, "AT_BYSubCategory", "Sample")
 
     country_val = art.get("country_code", "")
     if country_val:

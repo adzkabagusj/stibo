@@ -1311,6 +1311,12 @@ def build_product_xml(
     #     _val_text(gv, "AT_CurrentPrice",  generic["msrp"])
 
 
+    # MSRP tetap dimasukkan ke Principal MSRP
+    if generic.get("msrp"):
+        _val_text(gv, "AT_PrincipalMSRP", generic["msrp"])
+    
+    _val_text(gv, "AT_PrincipalMSRPCurrency", "USD")
+
 
     # AT_PrincipalMerchandiseHierarchyL5 ditentukan berdasarkan MSRP:
     # MSRP > 80  = Premium

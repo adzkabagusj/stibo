@@ -35,7 +35,8 @@ Column mapping (Lotto Mapping Issues and References.xlsx → "Mapping to STIBO")
     FOB Price       → AT_FOB          (2nd ingestion: Final FOB)
     FOB Currency    → AT_FOBCurrency
     ETA DATE        → AT_IncomingMonth
-    Image           → AT_ThumbnailImage (2nd ingestion: Updated Image)
+    Image           → not sent to STEP (AT_ThumbnailImage does not exist there;
+                      in-cell pictures feed Bedrock enrichment only)
     BCI             → AT_BCI          (1st ingestion: Manual Input → not sent;
                                         2nd ingestion: recap "BCI" column)
     Color / Code    → AT_PrincipalColorName / AT_PrincipalColorCode
@@ -109,6 +110,24 @@ log = logging.getLogger(__name__)
 # ══════════════════════════════════════════════════════════════════
 # NORMALISATION HELPERS
 # ══════════════════════════════════════════════════════════════════
+
+# E-com Ages Category — UAT rule (Licensed FW/App/Acc/Equipment, 1st and
+# 2nd ingestion): the value comes from the recap "Age Group" column.
+#   Adult = Adult, All Ages = Adult, Infant = Infant,
+#   Preschool = Play School / Pre School, Grade School = Grade School
+# "Kids" is absent on purpose: the MDD "E-com Ages Category LOV" has no such
+# value, and the principal confirmed (2026-09-21) that Kids is filled manually
+# in STIBO, so nothing is sent.  A blank Age Group sends nothing either.
+# Ids are the letter codes of that LOV sheet (A/G/I/P/T/Y are the rows whose
+# Code and Name columns still line up).  (display, LOV id)
+LOTTO_ECOM_AGES_BY_AGE_GROUP: dict[str, tuple[str, str]] = {
+    "ADULT":       ("Adult",                    "A"),
+    "ALLAGES":     ("Adult",                    "A"),
+    "INFANT":      ("Infant",                   "I"),
+    "PRESCHOOL":   ("Play School / Pre School", "P"),
+    "GRADESCHOOL": ("Grade School",             "G"),
+}
+
 
 def _norm_key(v) -> str:
     """Normalise any label / header / LOV display value to an A-Z0-9 key.
@@ -881,6 +900,11 @@ class LottoRecapLoader:
 
         df = pd.DataFrame(rows[hdr_idx + 1:], columns=header)
 
+        # Keep the worksheet row number: rows are filtered and re-indexed below, and
+        # in-cell images (excel_images.py) are keyed by their Excel row.
+        first_data_row = (ws.min_row or 1) + hdr_idx + 1
+        df[EXCEL_ROW_COLUMN] = range(first_data_row, first_data_row + len(df))
+
         log.info("[Recap-LOTTO] Found columns: %s", list(df.columns))
         
         # Log first data row for debugging
@@ -990,6 +1014,9 @@ RECAP_COLUMNS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
 SECOND_INGESTION_MARKERS: tuple[str, ...] = tuple(
     name for second, _first in RECAP_COLUMNS.values() for name in second
 )
+
+# Synthetic column added by LottoRecapLoader: the worksheet row of each recap row.
+EXCEL_ROW_COLUMN = "_excel_row"
 
 
 def detect_ingestion_phase(columns) -> int:
@@ -1104,8 +1131,8 @@ def _resolve_gender_age(mapped: dict, md_mapping=None) -> None:
 
     Priority is the brand-mapping workbook ("Lotto MD Mapping" tab) when it has
     a row for the value, then the tables transcribed from the "BY Age & Gender"
-    sheet.  Gender drives Gender; the recap "Age Group" column drives Age, and
-    only when that column is absent does Gender stand in for it.
+    sheet.  Gender drives Gender; the recap "Age Group" column drives Age.  A
+    blank Age Group leaves SAP Age and BY Age blank.
     """
     gender_raw = mapped.get("gender_raw", "")
     age_raw    = mapped.get("age_group", "")
@@ -1119,17 +1146,23 @@ def _resolve_gender_age(mapped: dict, md_mapping=None) -> None:
     if not by_g:
         by_g = sap_g
 
-    age_key = age_raw or LOTTO_GENDER_TO_AGE_GROUP.get(_norm_key(gender_raw), "Adult")
-    sap_a, by_a = LOTTO_AGE_GROUP_MAP.get(_norm_key(age_key), ("", ""))
-    if md_mapping is not None:
-        sap_a = (md_mapping.get_sap_age_lov_value(age_key)
-                 or md_mapping.get_sap_age_lov_value(gender_raw) or sap_a)
-        by_a  = (md_mapping.get_by_age_lov_value(age_key)
-                 or md_mapping.get_by_age_lov_value(gender_raw) or by_a)
-    if not sap_a:
-        sap_a = "Adults"
-    if not by_a:
-        by_a = LOV_BY_AGE.get(_norm_key(sap_a), sap_a)
+    # Age (UAT feedback 2026-09-14, confirmed on K-Swiss): a blank "Age Group"
+    # means blank SAP Age and BY Age.  MDD cardinality (SAP Age = Mandatory)
+    # is enforced inside STIBO, where the user completes it — not at
+    # ingestion — so Gender is no longer used to guess an age.
+    sap_a, by_a = "", ""
+    age_key = (age_raw or "").strip()
+    if age_key:
+        sap_a, by_a = LOTTO_AGE_GROUP_MAP.get(_norm_key(age_key), ("", ""))
+        if md_mapping is not None:
+            sap_a = (md_mapping.get_sap_age_lov_value(age_key)
+                     or md_mapping.get_sap_age_lov_value(gender_raw) or sap_a)
+            by_a  = (md_mapping.get_by_age_lov_value(age_key)
+                     or md_mapping.get_by_age_lov_value(gender_raw) or by_a)
+        if not sap_a:
+            sap_a = "Adults"
+        if not by_a:
+            by_a = LOV_BY_AGE.get(_norm_key(sap_a), sap_a)
 
     mapped["sap_gender_display"] = sap_g
     mapped["by_gender_display"]  = by_g
@@ -1331,7 +1364,7 @@ def map_article_lotto(recap_row, brand_code: str = "LOT", phase: int = 1) -> dic
       MD Category   -> AT_PrincipalMerchandiseHierarchyL2, AT_SportsCategoryEN
       FOB Currency  -> AT_FOBCurrency
       ETA DATE      -> AT_IncomingMonth
-      Image         -> AT_ThumbnailImage   (2nd ingestion: Updated Image)
+      Image         -> kept on the article only (not sent to STEP)
       BCI           -> AT_BCI              (1st ingestion: default Commercial)
     """
     row = recap_row if isinstance(recap_row, RecapRow) else RecapRow(recap_row, phase)
@@ -1546,7 +1579,7 @@ def map_article_lotto(recap_row, brand_code: str = "LOT", phase: int = 1) -> dic
         "sizes_list":        sizes_list,
 
         # BY / image / schedule
-        "image":             image,              # Image column      -> AT_ThumbnailImage
+        "image":             image,              # Image column (not sent to STEP)
         "bci":               bci,                # BCI column        -> AT_BCI
         "eta_date":          eta_date,           # ETA DATE column   -> AT_IncomingMonth
 
@@ -1554,6 +1587,7 @@ def map_article_lotto(recap_row, brand_code: str = "LOT", phase: int = 1) -> dic
         "generic_code":      generic_code,
         "season_raw":        season,
         "ingestion_phase":   row.phase,
+        "excel_row":         int(row.raw(EXCEL_ROW_COLUMN)) if row.raw(EXCEL_ROW_COLUMN) is not None else None,
     }
 
 
@@ -1745,10 +1779,9 @@ def _add_generic_values(
             by_age_id = by_age.upper()
         _w("AT_BYAge", by_age, id_val=by_age_id)
 
-    # AT_PrincipalAgeDescription — UAT Result rows 5-6 ask for it mirrored onto
-    # the generic, so it is written for every article: the raw "Age Group" when
-    # the recap has one, otherwise the value the Age mapping resolved to.
-    age_description = art.get("age_group") or by_age
+    # AT_PrincipalAgeDescription — "Direct from Principal": the raw "Age Group"
+    # cell, blank when the recap leaves it blank (UAT feedback 2026-09-14).
+    age_description = art.get("age_group")
     if age_description:
         _w("AT_PrincipalAgeDescription", age_description)
 
@@ -1781,10 +1814,9 @@ def _add_generic_values(
     if art.get("md_category"):
         _w("AT_PrincipalMerchandiseHierarchyL2", art["md_category"])
 
-    # ── Thumbnail Image (UAT Result rows 14-15) ──────────────────
-    # 1st ingestion: "Image"; 2nd ingestion: "Updated Image".
-    if art.get("image"):
-        _w("AT_ThumbnailImage", art["image"])
+    # The recap Image / Updated Image column is not sent to STEP: AT_ThumbnailImage
+    # does not exist there (import error "Attribute 'AT_ThumbnailImage' not found").
+    # In-cell product pictures are only used for Bedrock enrichment (recap AI ingestion).
 
     # ── Incoming Month → recap "ETA DATE" (UAT Result row 18) ────
     if art.get("eta_date"):
@@ -1849,7 +1881,15 @@ def _add_generic_values(
     
     # ── Brand Type / Brand Category ───────────────────────────────
     _w("AT_BrandType",     art.get("brand_type",     ""))
-    # _w("AT_BrandCategory", art.get("brand_category", ""))
+    # AT_BrandCategory — V6 sheet "2. Source Mapping related RNA", matched on
+    # Brand Code + SBU (with country and company code).  The MDD "Brand
+    # Category LOV" uses the value itself as its id ("ID - SP - NON TOP"), so
+    # it is sent as an id; an unresolved row sends nothing.
+    brand_category = (art.get("brand_category") or "").strip()
+    if brand_category:
+        _w("AT_BrandCategory", "", id_val=brand_category)
+    else:
+        log.warning("[RNA] No Brand Category resolved (article %s)", art.get("article_no"))
 
     # ── Sports Category EN (UAT Result rows 52-75) ───────────────
     # Licensed scope is Footwear only; the source is the recap "MD Category"
@@ -1875,9 +1915,25 @@ def _add_generic_values(
     if art.get("is_footwear"):
         _w("AT_CountrySize", "", id_val="EU")
 
+    # ── E-com Ages Category — from the recap "Age Group" ─────────
+    eca_rule = LOTTO_ECOM_AGES_BY_AGE_GROUP.get(_norm_key(art.get("age_group")))
+    if eca_rule:
+        eca_display, eca_id = eca_rule
+        _w("AT_EComAgesCategory", eca_display, id_val=eca_id)
+
     # ── UOM (Unit of Measure) ────────────────────────────────────
     uom_code = "EA"
     _w("AT_UOM", LOV_UOM.get(uom_code, "Each"), id_val=uom_code)
+
+    # ── Bedrock AI attributes (recap AI ingestion only) ──────────
+    # Written last: _w() skips attributes already set above, so rule-based
+    # values (e.g. AT_SportsCategoryEN from MD Category) always win and the AI
+    # only fills attributes the ETL left empty.
+    for attr_id, entry in (art.get("ai_attributes") or {}).items():
+        if entry.get("id"):
+            _w(attr_id, entry["value"], id_val=entry["id"])
+        else:
+            _w(attr_id, entry["value"])
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2040,10 +2096,85 @@ def _process_article(row_tuple):
 
 
 # ══════════════════════════════════════════════════════════════════
+# SECTION 6b — BEDROCK AI ENRICHMENT (recap AI ingestion only)
+# ══════════════════════════════════════════════════════════════════
+
+# AI LOV attribute -> LOV name as keyed by MDDLoader.lovs
+AI_LOV_MDD_SHEETS = {
+    "AT_Color":            "Color Code",
+    "AT_Silhouette":       "Silhouette",
+    "AT_Fastening":        "Fastening",
+    "AT_MaterialUpper":    "Material -Upper",
+    "AT_Material":         "Material",
+    "AT_PatternPrint":     "PatternPrint",
+    "AT_Width":            "Width",
+    "AT_Occasion":         "Ocassion",
+    "AT_Interest":         "Interest",
+    "AT_SportsCategoryEN": "Sports Category",
+}
+
+
+def _mdd_lov_pairs(mdd, lov_name: str) -> set[tuple[str, str]] | None:
+    """(display, id) pairs of an MDD LOV, or None when the MDD does not carry it.
+
+    The named LOV sheets are "Code | Name" while "Sports Category" is "Name | ID",
+    so both orientations are accepted.
+    """
+    raw = mdd.lovs.get(lov_name) if mdd is not None else None
+    if not raw:
+        return None
+    pairs = {(str(a).strip(), str(b).strip()) for a, b in raw.items()}
+    return pairs | {(b, a) for a, b in pairs}
+
+
+def _run_ai_enrichment(recap_path: Path, mapped_articles: list[dict], args, mdd, auditor) -> None:
+    """Extract in-cell images and enrich the articles through the Bedrock Lambda.
+
+    Never raises: on any failure the XML is written without AI attributes.
+    """
+    try:
+        try:
+            from lotto import bedrock_enrichment, excel_images
+        except ImportError:  # run as a script from inside lotto/
+            import bedrock_enrichment
+            import excel_images
+
+        extraction = excel_images.extract_in_cell_images(recap_path)
+        log.info("[BedrockEnrichment] %d in-cell image(s) in sheet '%s', %d issue(s)",
+                 len(extraction.images), extraction.sheet, len(extraction.issues))
+        bedrock_enrichment.enrich_articles(
+            mapped_articles, extraction.images, brand=args.brand,
+            auditor=auditor, image_issues=extraction.issues,
+        )
+    except Exception as exc:
+        log.exception("[BedrockEnrichment] failed — XML is written without AI attributes")
+        if auditor:
+            auditor.record_loader("bedrock_enrichment", "error", error=f"{type(exc).__name__}: {exc}")
+        return
+
+    # STEP drops a LOV value whose ID it does not know, so only send pairs the MDD confirms.
+    dropped = []
+    for art in mapped_articles:
+        ai = art.get("ai_attributes") or {}
+        for attr_id, entry in list(ai.items()):
+            if not entry.get("id"):
+                continue
+            pairs = _mdd_lov_pairs(mdd, AI_LOV_MDD_SHEETS.get(attr_id, ""))
+            if pairs is not None and (entry["value"], entry["id"]) not in pairs:
+                del ai[attr_id]
+                dropped.append(f"[BedrockEnrichment] {art.get('article_no')}: {attr_id} "
+                               f"'{entry['value']}' ({entry['id']}) is not in the MDD LOV — not sent")
+    if dropped:
+        log.warning("%d AI LOV value(s) not in the MDD were dropped", len(dropped))
+        if auditor:
+            auditor.add_validation_warnings(dropped)
+
+
+# ══════════════════════════════════════════════════════════════════
 # SECTION 7 — ORCHESTRATOR
 # ══════════════════════════════════════════════════════════════════
 
-def run(args, auditor=None):
+def run(args, auditor=None, recap_dir: Path | None = None, ai_enrichment: bool = False):
     """
     Main entry point for LOTTO Licensed Recap.
 
@@ -2054,6 +2185,10 @@ def run(args, auditor=None):
         sbu         str   e.g. "SP"
         season      str   e.g. "SS26"
         seq         int   e.g. 1
+
+    recap_dir      folder holding the recap workbook(s); defaults to input/recap/
+    ai_enrichment  enrich articles through Bedrock before writing the XML
+                   (recap AI ingestion — see recap_ai_main.py)
     """
 
     def first(d: Path, ext: str = "*.xlsx") -> Path | None:
@@ -2096,7 +2231,7 @@ def run(args, auditor=None):
 
     mdd_f      = first(MDD_DIR)
     attr_f     = find_brand_mapping_file(ATTR_DIR)
-    recap_files = list(RECAP_DIR.glob("*.xlsx"))
+    recap_files = list((recap_dir or RECAP_DIR).glob("*.xlsx"))
 
     # ── Mandatory file checks ────────────────────────────────────
     for label, val in [("MDD", mdd_f), ("Brand Mapping", attr_f), ("Recap", recap_files)]:
@@ -2116,13 +2251,14 @@ def run(args, auditor=None):
 
     mdd    = MDDLoader(mdd_f)
 
-    # The 13 attributes COE reported as failing for Lotto (UAT Result sheet).
+    # The attributes COE reported as failing for Lotto (UAT Result sheet), minus
+    # AT_ThumbnailImage, which is no longer sent (it does not exist in STEP).
     # If one is missing from the MDD it can never be populated no matter what
     # we send, so surface that up front instead of debugging it per article.
     _uat_attrs = [
         "AT_PrincipalStyleCode", "AT_PrincipalAgeDescription", "AT_FOBCurrency",
         "AT_PrincipalMerchandiseHierarchyL1", "AT_PrincipalMerchandiseHierarchyL2",
-        "AT_ThumbnailImage", "AT_BCI", "AT_IncomingMonth", "AT_SAPAge",
+        "AT_BCI", "AT_IncomingMonth", "AT_SAPAge",
         "AT_BYAge", "AT_BYGender", "AT_Gender", "AT_SportsCategoryEN", "AT_UOM",
     ]
     _unknown = [a for a in _uat_attrs if a not in mdd.attributes]
@@ -2231,6 +2367,9 @@ def run(args, auditor=None):
         del ordered
 
         log.info("Pass 1 done — mapped=%d articles", len(mapped_articles))
+
+        if ai_enrichment:
+            _run_ai_enrichment(recap_path, mapped_articles, args, mdd, auditor)
 
         # ── Pass 2: stream XML to file ───────────────────────────
         log.info("Pass 2/2 — streaming XML to %s …", out_name)

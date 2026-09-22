@@ -16,6 +16,7 @@ Lotto-specific flow:
 
 File-type dispatch:
     orderform → lotto.orderform_main.run()
+    recap_ai  → lotto.recap_ai_main.run()   (recap + Bedrock enrichment; see INTEGRATION_BEDROCK.md)
 
 S3 layout:
     raw/metadata/lotto/{orderform_file}.xlsx   ← Lotto uploads here
@@ -51,6 +52,7 @@ os.environ["LAMBDA_TMP_DIR"] = TMP_WORKDIR
 import lotto.orderform_main       as orderform_etl        # noqa: E402
 import lotto.fob_order_info_main  as fob_order_info_etl   # noqa: E402
 import lotto.recap_main           as recap_etl            # noqa: E402
+import lotto.recap_ai_main        as recap_ai_etl         # noqa: E402
 import lotto.pricelist_main       as pricelist_etl        # noqa: E402
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -80,6 +82,11 @@ FILE_TYPE_KEYWORDS: dict[str, list[str]] = {
         "price list", "pricelist", "price-list", "price_list",
         "licensee price", "usd licensee",
     ],
+    # recap_ai MUST appear before recap — its file names also contain "recap".
+    # e.g. "RECAP_SAMPLE_DEVELOPMENT-LOT-SS27-Footwear_AI-Ingestion.xlsx"
+    "recap_ai": [
+        "ai-ingestion", "ai ingestion", "ai_ingestion",
+    ],
     "recap": [
         "recap", "recap sample", "licensed recap", "sample development",
     ],
@@ -99,6 +106,7 @@ REQUIRED_TYPES_BY_TRIGGER: dict[str, set[str]] = {
     "orderform":      {"orderform"},
     "fob_order_info": {"fob_order_info"},
     "recap":          {"recap", "mdd", "attributes"},
+    "recap_ai":       {"recap_ai", "mdd", "attributes"},
     "pricelist":      {"pricelist"},
 }
 REQUIRED_TYPES_DEFAULT: set[str] = {"orderform"}
@@ -109,8 +117,14 @@ ETL_DISPATCHER: dict[str, object] = {
     "orderform":      orderform_etl,
     "fob_order_info": fob_order_info_etl,
     "recap":          recap_etl,
+    "recap_ai":       recap_ai_etl,
     "pricelist":      pricelist_etl,
 }
+
+# File types only processed when that file itself is uploaded: a global MDD /
+# brand-mapping fan-out or another Lotto upload never re-runs them (each run of
+# recap_ai calls Bedrock and sends a new XML to STEP).
+UPLOAD_ONLY_TYPES: set[str] = {"recap_ai"}
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -283,7 +297,7 @@ def _lotto_default_metadata(dirs: dict) -> dict:
         "VIETNAM": "VN", "VN": "VN",
         "CAMBODIA": "KH", "CAMBODIAN": "KH", "KH": "KH",
     }
-    search_dirs = [dirs.get("recap"), dirs.get("orderform"), dirs.get("fob_order_info")]
+    search_dirs = [dirs.get("recap_ai"), dirs.get("recap"), dirs.get("orderform"), dirs.get("fob_order_info")]
     for folder in search_dirs:
         if not folder or not folder.exists():
             continue
@@ -329,6 +343,7 @@ def _prepare_tmp_dirs() -> dict[str, Path]:
         "orderform":      base / "input" / "orderform",
         "fob_order_info": base / "input" / "fob_order_info",
         "recap":          base / "input" / "recap",
+        "recap_ai":       base / "input" / "recap_ai",
         "pricelist":      base / "input" / "pricelist",
         "mdd":            base / "input" / "mdd",
         "attributes":     base / "input" / "attributes",
@@ -404,8 +419,9 @@ def lambda_handler(event, context, auditor: AuditLogger = None):
     etl_module     = ETL_DISPATCHER.get(triggered_file_type)
     required_types = REQUIRED_TYPES_BY_TRIGGER.get(triggered_file_type, REQUIRED_TYPES_DEFAULT)
 
-    found = _list_principal_files(bucket, principal,
-                                  exclude_types={triggered_file_type} if triggered_file_type else set())
+    exclude_types = {triggered_file_type} if triggered_file_type else set()
+    exclude_types |= UPLOAD_ONLY_TYPES - {triggered_file_type}
+    found = _list_principal_files(bucket, principal, exclude_types=exclude_types)
 
     trigger_filename = Path(key).name
     if triggered_file_type and not trigger_filename.startswith(".__"):

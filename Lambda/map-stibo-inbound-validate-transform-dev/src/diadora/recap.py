@@ -119,6 +119,37 @@ DIA_RECAP_CATEGORY_TO_SPORTS_CAT: dict[str, str] = {
     "LIFESTYLE SPORTSWEAR": "Lifestyle / Casual",
 }
 
+# Sports Category EN — "Diadora Mapping Issues and References.xlsx" →
+# "Mapping to STIBO" rows 272-294 (License, Product Division Footwear):
+# source = recap "MD Category" (1st & 2nd ingestion).  Keys use _compact_norm.
+DIA_MD_CATEGORY_TO_SPORTS_CAT: dict[str, str] = {
+    "casual":          "Lifestyle / Casual",
+    "basketball":      "Basketball",
+    "lifestyle":       "Lifestyle / Casual",
+    "soccer":          "Soccer",
+    "fitness":         "Fitness / Training",
+    "kids":            "Lifestyle / Casual",
+    "tennisbadminton": "Tennis / Padel",
+    "tennis":          "Tennis / Padel",
+    "badminton":       "Badminton",
+    "outdoor":         "Outdoor / Trail / Hiking",
+    "running":         "Running",
+    "sandal":          "Lifestyle / Casual",
+    "skate":           "Skateboarding",
+}
+
+# Ids from the MDD "Sports Category LOV" sheet (Sports Category Name | ID) —
+# used when the id cannot be read from the loaded MDD.
+DIA_SPORTS_CATEGORY_LOV_ID: dict[str, str] = {
+    "Badminton": "1", "Basketball": "2", "Fitness / Training": "4", "Lifestyle / Casual": "6",
+    "Running": "7", "Soccer": "8", "Tennis / Padel": "10", "Outdoor / Trail / Hiking": "12",
+    "Skateboarding": "13",
+}
+
+# Country Size — V6 sheet "DIADORA (UPD LIC)" row 143, License column:
+# Default: EUR (Footwear).  STIBO's LOV id for EU/EUR is "EU".
+DIA_COUNTRY_SIZE_EUR_ID = "EU"
+
 LOV_AGE = {
     "AD": "Adults", "CH": "Children", "IN": "Infant",
     "AA": "All Ages", "JR": "Junior", "K": "Kids",
@@ -155,6 +186,24 @@ _DIA_CHILD_GENDERS = {"BOY", "BOYS", "GIRL", "GIRLS", "KID", "KIDS", "CHILDREN"}
 # K-Swiss, Ellesse, Reebok): brand(3) + article type(1) + season-year digit(1)
 # + code category(1) + last 4 of Supp Art # + gender code(1) + colour code(1).
 DIA_ARTICLE_TYPE_CODE: dict[str, str] = {"LICENSE": "R", "SSE": "X", "WHOLESALE": "W", "SAMPLE": "S"}
+
+
+# E-com Ages Category — UAT rule (Licensed FW/App/Acc/Equipment, 1st and
+# 2nd ingestion): the value comes from the recap "Age Group" column.
+#   Adult = Adult, All Ages = Adult, Infant = Infant,
+#   Preschool = Play School / Pre School, Grade School = Grade School
+# "Kids" is absent on purpose: the MDD "E-com Ages Category LOV" has no such
+# value, and the principal confirmed (2026-09-21) that Kids is filled manually
+# in STIBO, so nothing is sent.  A blank Age Group sends nothing either.
+# Ids are the letter codes of that LOV sheet (A/G/I/P/T/Y are the rows whose
+# Code and Name columns still line up).  (display, LOV id)
+DIA_ECOM_AGES_BY_AGE_GROUP: dict[str, tuple[str, str]] = {
+    "ADULT":       ("Adult",                    "A"),
+    "ALLAGES":     ("Adult",                    "A"),
+    "INFANT":      ("Infant",                   "I"),
+    "PRESCHOOL":   ("Play School / Pre School", "P"),
+    "GRADESCHOOL": ("Grade School",             "G"),
+}
 
 
 def _dia_key(v) -> str:
@@ -1036,6 +1085,7 @@ def _build_product_xml(
     filename_meta: dict[str, str],
     comp_code: str,
     sbu: str,
+    country_code: str = "",
 ) -> str:
     key = _product_key(row, brand_code, row_num)
     if not key:
@@ -1100,7 +1150,26 @@ def _build_product_xml(
     b_cat = brand_cats.get("brand_category", "LICENCE")
 
     _write_simple_value(values, written, "AT_BrandType", "", id_val=b_type)
-    _write_simple_value(values, written, "AT_BrandCategory", "", id_val=b_cat)
+
+    # AT_BrandCategory — V6 sheet "2. Source Mapping related RNA" on Brand Code
+    # + SBU.  The country comes from the file name when it carries one and from
+    # the Lambda argument otherwise; the old code keyed on the file name alone,
+    # so the lookup usually missed and fell back to the id "LICENCE", which is
+    # not a value of the MDD "Brand Category LOV" (its ids are the values
+    # themselves, e.g. "ID - SP - TOP").  An unresolved row now sends nothing.
+    rna_country_code = c_code_for_rna or (country_code or "").strip().upper()
+    rna_country = country_name_map.get(rna_country_code, rna_country_code)
+    brand_cat_row = rna.lookup.get((
+        RNALoader._norm_country(rna_country),
+        RNALoader._norm_comp_code(comp_code),
+        sbu.upper(),
+        brand_code.upper(),
+    ), {})
+    brand_category = (brand_cat_row.get("brand_category") or "").strip()
+    if brand_category:
+        _write_simple_value(values, written, "AT_BrandCategory", "", id_val=brand_category)
+    else:
+        log.warning("[RNA] No Brand Category resolved (row %s)", row_num)
     _write_multi_value(values, written, "AT_CompanyCode", comp_code)
     _write_multi_value(values, written, "AT_SBU", sbu)
     
@@ -1148,10 +1217,16 @@ def _build_product_xml(
         by_age_lov_value = LOV_BY_AGE.get(age_group_val.upper(), age_group_val)
         _write_simple_value(values, written, "AT_BYAge", by_age_lov_value, id_val=by_age_lov_value.upper())
 
-    if "AT_SAPAge" not in written:
-        # No Age Group in the recap: Gender stands in (Lotto logic).
-        sap_age_disp, sap_age_lov_id = _dia_sap_age("", gender_raw)
-        _write_simple_value(values, written, "AT_SAPAge", sap_age_disp, id_val=sap_age_lov_id)
+        # E-com Ages Category — same Age Group source ("Mapping to STIBO"
+        # row 307: "1st and 2nd ingestion : age group").
+        eca_rule = DIA_ECOM_AGES_BY_AGE_GROUP.get(_dia_key(age_group_val))
+        if eca_rule:
+            # id only: the MDD and the v6 LOV list spell "Play School / Pre-School"
+            # differently, so the display text is left out.
+            _write_simple_value(values, written, "AT_EComAgesCategory", "", id_val=eca_rule[1])
+    # A blank "Age Group" leaves SAP Age blank (UAT feedback 2026-09-14,
+    # confirmed on K-Swiss): MDD cardinality is enforced inside STIBO, so
+    # Gender is no longer used to guess an age.
 
     for entry in mappings:
         if entry.attribute_id in written:
@@ -1183,28 +1258,35 @@ def _build_product_xml(
     _write_simple_value(values, written, "AT_SAPProductFlag", "", id_val="A")
     _write_simple_value(values, written, "AT_MaterialType", "", id_val="ZINA")
 
-    # ── Sports Category ──────────────────────────────────────────
-    category_raw = _clean_text(row.get("Collection") or row.get("Category"))
-    if category_raw:
-        sports_cat_label = DIA_RECAP_CATEGORY_TO_SPORTS_CAT.get(category_raw.upper(), "")
+    # ── Sports Category EN (Mapping to STIBO rows 272-294) ───────
+    # License, Product Division Footwear only; source = recap "MD Category"
+    # (1st & 2nd ingestion) mapped through DIA_MD_CATEGORY_TO_SPORTS_CAT.
+    # APP / ACC / Equipment are filled manually by MD, so nothing is sent.
+    # The old block read a "Collection" / "Category" column the recap does not
+    # have and used ids that do not match the MDD — hence "not populated".
+    if _compact_norm(row.get("Division")) == "footwear":
+        sports_cat_label = DIA_MD_CATEGORY_TO_SPORTS_CAT.get(_compact_norm(row.get("MD Category")), "")
         if sports_cat_label:
-            hardcoded_lov = {
-                "RUNNING": "01", "SOCCER": "02", "BASKETBALL": "03",
-                "TENNIS / PADEL": "04", "FITNESS / TRAINING": "05", "SWIMMING": "06",
-                "LIFESTYLE / CASUAL": "07", "OUTDOOR": "08", "ACTION SPORTS": "09",
-                "OTHER": "10", "NOT APPLICABLE": "11",
-            }
-            sports_cat_id = hardcoded_lov.get(sports_cat_label.upper())
-            if not sports_cat_id:
-                sports_lov = mdd.lovs.get("sports category", {})
-                sports_cat_id = sports_lov.get(_norm(sports_cat_label), "")
-                if not sports_cat_id:
-                    sports_cat_id = sports_lov.get(_compact_norm(sports_cat_label), "")
-                if sports_cat_id and sports_cat_id.isdigit() and len(sports_cat_id) == 1:
-                    sports_cat_id = f"0{sports_cat_id}"
-            
+            sports_cat_id = ""
+            # MDDLoader reads LOV sheets as col A = code, col B = display, but
+            # "Sports Category LOV" is Name | ID, so the numeric id is the key.
+            for key, value in mdd.lovs.get("sports category", {}).items():
+                if key.isdigit() and _compact_norm(value) == _compact_norm(sports_cat_label):
+                    sports_cat_id = key
+                    break
+            sports_cat_id = sports_cat_id or DIA_SPORTS_CATEGORY_LOV_ID.get(sports_cat_label, "")
             if sports_cat_id:
+                # two digits, as K-Swiss / Airwalk send it (e.g. "07" = Running)
+                sports_cat_id = str(int(sports_cat_id)).zfill(2)
                 _write_simple_value(values, written, "AT_SportsCategoryEN", "", id_val=sports_cat_id)
+
+    # ── Country Size (Mapping to STIBO rows 303-305) ─────────────
+    # License: Default EUR (Footwear); App, Acc & Sport Equipment are manual
+    # input by MD, so nothing is sent for them.  "EU" is the LOV id STIBO
+    # accepts for EU/EUR — the MDD "Country Size LOV" sheet says "UE", which
+    # STIBO drops (Airwalk and K-Swiss UAT), so the id is fixed here.
+    if _compact_norm(row.get("Division")) == "footwear":
+        _write_simple_value(values, written, "AT_CountrySize", "", id_val=DIA_COUNTRY_SIZE_EUR_ID)
 
     return _XMLNS_RE.sub("", ET.tostring(product, encoding="unicode"))
 
@@ -1282,6 +1364,7 @@ def run(args, auditor=None) -> None:
                     filename_meta,
                     args.comp_code,
                     args.sbu,
+                    getattr(args, "country_code", "") or "",
                 )
                 if not product_xml:
                     continue

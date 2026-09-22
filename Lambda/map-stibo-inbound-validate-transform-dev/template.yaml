@@ -17,8 +17,12 @@ Resources:
       Description: ''
       Environment:
         Variables:
+          BEDROCK_ENRICHMENT_URL: >-
+            https://xsqhlbvlznzfyojlwkv3as2i6q0eiltl.lambda-url.us-east-1.on.aws/
           PROCESSED_BUCKET: map-stibo-inbound-processed-dev
           RAW_BUCKET: map-stibo-inbound-raw-dev
+          BEDROCK_ENRICHMENT_TOKEN: OdmHzwm-fcFblzlmKz345ysoSNyC88xbpFIQ6C2TqdQastW8Yx5QrBcKu-Zy2N7C
+          BEDROCK_ENRICHMENT_ENABLED: 'true'
       EphemeralStorage:
         Size: 1024
       Handler: router.lambda_handler

@@ -1055,7 +1055,8 @@ def map_article_ellesse(recap_row: dict, brand_code: str = "ELL") -> dict:
     fob_str = _extract_price(fob_raw)
 
     # Currency
-    currency = currency_raw.upper() if currency_raw else ""
+    # Currency -> 3-letter ISO LOV id ("US$" / "$" / "US Dollar" -> "USD")
+    currency = _norm_currency(currency_raw)
 
     # Country of Origin - default CN (can be added to Excel file later)
     coo = "CN"
@@ -1442,9 +1443,12 @@ def _add_generic_values(
     if fob_value:
         _w("AT_FOB", fob_value)
     
+    # AT_FOBCurrency — recap "FOB Currency" (1st & 2nd ingestion), normalised
+    # to the 3-letter ISO code and resolved against the MDD LOV.
     currency_value = art.get("currency")
     if currency_value:
-        _w("AT_FOBCurrency", currency_value, id_val=currency_value)
+        _w("AT_FOBCurrency", currency_value,
+           id_val=_lic_mdd_lov_id(mdd, ("FOB Currency", "FOBCurrency", "Currency"), currency_value))
     
     rpc_id = _resolve_retail_price_currency(art.get("country_code", ""), art.get("mdd_currency"))
     if rpc_id:
@@ -1473,27 +1477,62 @@ def _add_generic_values(
     
     # ── Brand Type / Brand Category ───────────────────────────────
     _w("AT_BrandType",     art.get("brand_type",     ""))
-    # _w("AT_BrandCategory", art.get("brand_category", ""))
+    # AT_BrandCategory — V6 sheet "2. Source Mapping related RNA", matched on
+    # Brand Code + SBU (with country and company code).  The MDD "Brand
+    # Category LOV" uses the value itself as its id ("ID - SP - NON TOP"), so
+    # it is sent as an id; an unresolved row sends nothing.
+    brand_category = (art.get("brand_category") or "").strip()
+    if brand_category:
+        _w("AT_BrandCategory", "", id_val=brand_category)
+    else:
+        log.warning("[RNA] No Brand Category resolved (article %s)", art.get("article_no"))
 
-    # ── Sports Category EN ────────────────────────────────────────
-    # Only include if Division column says "footwear"
-    division_col = (art.get("division_col") or "").strip().lower()
-    if division_col == "footwear":
-        sc_display = art.get("sports_cat_en", "")
-        if sc_display and mdd:
-            sc_lov    = mdd.lovs.get("Sports Category", {})
-            sc_id_raw = sc_lov.get(sc_display, "")
-            if sc_id_raw:
-                try:
-                    sc_id = str(int(sc_id_raw)).zfill(2)
-                except (ValueError, TypeError):
-                    sc_id = str(sc_id_raw).strip()
-                _w("AT_SportsCategoryEN", id_val=sc_id)
+    # ── Sports Category EN (UAT row 53) ───────────────────────────
+    # Ellesse has no per-category table: the rule is a flat default
+    # "Lifestyle / Casual" for Footwear, Apparel and Accessories alike.
+    sc_display = ELLESSE_SPORTS_CATEGORY_DEFAULT
+    sc_id = ""
+    for lov_disp, lov_id in (mdd.lovs.get("Sports Category", {}) if mdd else {}).items():
+        if _lic_key(lov_disp) == _lic_key(sc_display) and str(lov_id).strip():
+            sc_id = str(lov_id).strip()
+            break
+    if sc_id:
+        try:
+            sc_id = str(int(float(sc_id))).zfill(2)
+        except (ValueError, TypeError):
+            sc_id = sc_id.strip()
+    _w("AT_SportsCategoryEN", sc_display, id_val=sc_id or ELLESSE_SPORTS_CATEGORY_FALLBACK_ID)
+
+    # ── E-com Ages Category (UAT row 54): default "Ages 18+ years" ─
+    _w("AT_EComAgesCategory", ELLESSE_ECOM_AGES_DEFAULT_DISPLAY,
+       id_val=ELLESSE_ECOM_AGES_DEFAULT_ID)
+
+    # ── Images Source (UAT row 55): default PHO (Photoshoot) ──────
+    _w("AT_ImagesSource", "", id_val=ELLESSE_IMAGES_SOURCE_DEFAULT_ID)
+
+    # ── Ecom Gender Description EN (UAT row 56) ───────────────────
+    # SAP Gender display + SAP Age display, so a Kids article keeps its own
+    # word (Boys / Girls / Kids) instead of the adult gender.
+    # SAP Age is blank when the recap has no Age Group.  The Ecom label then
+    # reads the age from the Gender word itself (Boys / Girls / Kids ->
+    # Children), exactly as before the blank-Age-Group change, so this
+    # attribute's output is unchanged.
+    ecom_age_key = _lic_key(art.get("sap_age_display"))
+    if not ecom_age_key:
+        ecom_age_key = "CHILDREN" if _lic_key(art.get("gender_raw")) in LIC_GENDER_TO_AGE_GROUP else "ADULTS"
+    ecom_gender = ELLESSE_ECOM_GENDER_DESC.get((_lic_key(art.get("sap_gender_display")), ecom_age_key))
+    if ecom_gender:
+        _w("AT_EcomGenderDescriptionEN", ecom_gender)
 
     # ── Country Size ─────────────────────────────────────────────
-    # Only include if Division column says "footwear" (case-insensitive)
-    if division_col == "footwear":
-        _w("AT_CountrySize", "", id_val="EU")
+    # V6 sheet ELLESSE row 143 (License): Footwear = EUR, Apparel = Asia,
+    # Accessories and Sports Equipment = No Size.  Any other Division value
+    # sends nothing.  Ids are fixed here rather than read from the MDD: its
+    # "Country Size LOV" sheet gives EU/EUR the id "UE", which STIBO drops.
+    cs_rule = ELLESSE_COUNTRY_SIZE_BY_DIVISION.get(_lic_key(art.get("division_col")))
+    if cs_rule:
+        cs_display, cs_id = cs_rule
+        _w("AT_CountrySize", "", id_val=cs_id)
 
     # ── UOM (Unit of Measure) ────────────────────────────────────
     uom_code = "EA"
@@ -1639,6 +1678,18 @@ def _lic_key(v) -> str:
     return re.sub(r"[^A-Z0-9]", "", str(v or "").upper())
 
 
+# Country Size by recap "Division" — V6 sheet ELLESSE row 143, License column:
+# Default: EUR (Footwear), Apparel: Asia, Accessories and Sports Equipment:
+# No Size.  Keys are compared through _lic_key().  (display, LOV id)
+ELLESSE_COUNTRY_SIZE_BY_DIVISION: dict[str, tuple[str, str]] = {
+    "FOOTWEAR":        ("EU/EUR",  "EU"),
+    "FW":              ("EU/EUR",  "EU"),
+    "APPAREL":         ("ASIA",    "ASIA"),
+    "ACCESSORIES":     ("NO SIZE", "NS"),
+    "SPORTSEQUIPMENT": ("NO SIZE", "NS"),
+}
+
+
 # recap "Gender" → (SAP Gender display, BY Gender display)
 LIC_GENDER_MAP: dict[str, tuple[str, str]] = {
     "MALE": ("Male", "Male"), "MAN": ("Male", "Male"), "MEN": ("Male", "Male"),
@@ -1671,6 +1722,55 @@ LIC_SAP_GENDER_LOV_ID: dict[str, str] = {"Male": "M", "Female": "F", "Unisex": "
 # column for BY Age, so this table is the fallback.
 LIC_BY_AGE_LOV_ID: dict[str, str] = {
     v: v.upper() for v in ("Adult", "Kids", "All Ages", "Infant", "Preschool", "Grade School")
+}
+
+
+# ── E-commerce defaults — "Ellesse Mapping Issues and References.xlsx"
+# → "UAT Result" rows 53-56 and "Mapping to STIBO" rows 284-300 / 350.
+#
+#   Sports Category EN  FW, ACC, APP → always "Lifestyle / Casual"
+#   E-com Ages Category always "Ages 18+ years"
+#   Images Source       always "PHO" (Photoshoot)
+#   Ecom Gender Desc EN SAP Gender + SAP Age ("Men + Kids → Boys")
+#
+# Ids come from the MDD LOV sheets at runtime; the constants below are the
+# fallback when a sheet is missing.
+_CURRENCY_ALIASES = {
+    "US": "USD", "USD": "USD", "USDOLLAR": "USD", "USDOLLARS": "USD",
+    "UNITEDSTATESDOLLAR": "USD", "RP": "IDR", "RMB": "CNY", "EURO": "EUR",
+}
+
+
+def _norm_currency(raw: str) -> str:
+    """Recap "FOB Currency" cell -> 3-letter ISO LOV id ("US$" / "$" -> "USD")."""
+    v = (raw or "").strip()
+    if not v:
+        return ""
+    if v in ("$", "US$", "USD$"):
+        return "USD"
+    alias = _CURRENCY_ALIASES.get(_lic_key(v))
+    if alias:
+        return alias
+    m = re.search(r"([A-Za-z]{3})", v)
+    if m:
+        return m.group(1).upper()
+    return _lic_key(v)[:3]
+
+
+ELLESSE_SPORTS_CATEGORY_DEFAULT = "Lifestyle / Casual"
+ELLESSE_SPORTS_CATEGORY_FALLBACK_ID = "06"      # MDD "Sports Category LOV"
+ELLESSE_ECOM_AGES_DEFAULT_DISPLAY = "Ages 18+ years"
+ELLESSE_ECOM_AGES_DEFAULT_ID = "18+Y"           # MDD sheet columns are out of
+                                                # step, so the id is fixed here
+ELLESSE_IMAGES_SOURCE_DEFAULT_ID = "PHO"        # MDD "Images Source LOV": PHO = Photoshoot
+
+# (SAP Gender display, SAP Age display) → Ecom Gender Description EN.
+# "Kids Gender" was the UAT defect: Unisex + Children is "Kids", not "Unisex".
+# AT_EcomGenderDescriptionEN is limited to 10 characters in the MDD.
+ELLESSE_ECOM_GENDER_DESC: dict[tuple[str, str], str] = {
+    ("MALE", "ADULTS"): "Men", ("FEMALE", "ADULTS"): "Women", ("UNISEX", "ADULTS"): "Unisex",
+    ("MALE", "ALLAGES"): "Men", ("FEMALE", "ALLAGES"): "Women", ("UNISEX", "ALLAGES"): "Unisex",
+    ("MALE", "CHILDREN"): "Boys", ("FEMALE", "CHILDREN"): "Girls", ("UNISEX", "CHILDREN"): "Kids",
 }
 
 
@@ -1712,17 +1812,23 @@ def _resolve_gender_age(mapped: dict, md_mapping=None) -> None:
     if not by_g:
         by_g = sap_g
 
-    age_key = age_raw or LIC_GENDER_TO_AGE_GROUP.get(_lic_key(gender_raw), "Adult")
-    sap_a, by_a = LIC_AGE_GROUP_MAP.get(_lic_key(age_key), ("", ""))
-    if md_mapping is not None:
-        sap_a = (md_mapping.get_sap_age_lov_value(age_key)
-                 or md_mapping.get_sap_age_lov_value(gender_raw) or sap_a)
-        by_a  = (md_mapping.get_by_age_lov_value(age_key)
-                 or md_mapping.get_by_age_lov_value(gender_raw) or by_a)
-    if not sap_a:
-        sap_a = "Adults"
-    if not by_a:
-        by_a = "Kids" if sap_a == "Children" else ("All Ages" if sap_a == "All Ages" else "Adult")
+    # Age (UAT feedback 2026-09-14, confirmed on K-Swiss): a blank "Age Group"
+    # means blank SAP Age and BY Age.  MDD cardinality (SAP Age = Mandatory)
+    # is enforced inside STIBO, where the user completes it — not at
+    # ingestion — so Gender is no longer used to guess an age.
+    sap_a, by_a = "", ""
+    age_key = age_raw.strip()
+    if age_key:
+        sap_a, by_a = LIC_AGE_GROUP_MAP.get(_lic_key(age_key), ("", ""))
+        if md_mapping is not None:
+            sap_a = (md_mapping.get_sap_age_lov_value(age_key)
+                     or md_mapping.get_sap_age_lov_value(gender_raw) or sap_a)
+            by_a  = (md_mapping.get_by_age_lov_value(age_key)
+                     or md_mapping.get_by_age_lov_value(gender_raw) or by_a)
+        if not sap_a:
+            sap_a = "Adults"
+        if not by_a:
+            by_a = "Kids" if sap_a == "Children" else ("All Ages" if sap_a == "All Ages" else "Adult")
 
     mapped["sap_gender_display"] = sap_g
     mapped["by_gender_display"]  = by_g
@@ -2013,4 +2119,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-  

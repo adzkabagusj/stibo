@@ -1678,21 +1678,11 @@ def _add_generic_values(
         _w("AT_IncomingMonth", _fmt_date(art["eta_date"]))
         
     # ── Ecom Gender Description EN ───────────────────────────────
-    ecom_gender_desc = ""
-    gender_up = (art.get("gender_raw") or "").upper()
-    age_up = (art.get("age_group") or "").upper()
-    
-    if gender_up == "MEN" and age_up in ("KIDS", "CHILDREN"):
-        ecom_gender_desc = "Boys"
-    elif gender_up == "WOMEN" and age_up in ("KIDS", "CHILDREN"):
-        ecom_gender_desc = "Girls"
-    elif gender_up == "MALE":
-        ecom_gender_desc = "Men" if age_up == "ADULTS" else "Boys"
-    elif gender_up == "FEMALE":
-        ecom_gender_desc = "Women" if age_up == "ADULTS" else "Girls"
-    else:
-        ecom_gender_desc = art.get("gender_raw", "").title()
-        
+    # "Mapping to STIBO" rows 306-307: SAP Gender Description + SAP Age Group
+    # Description ("SAP Gender Men + SAP Age Kids → Boys"), not the raw recap
+    # columns.  A blank SAP Age or SAP Gender sends nothing.
+    ecom_gender_desc = REEBOK_ECOM_GENDER_DESC.get(
+        (_lic_key(art.get("sap_gender_display")), _lic_key(art.get("sap_age_display"))), "")
     if ecom_gender_desc:
         _w("AT_EcomGenderDescriptionEN", ecom_gender_desc)
 
@@ -1735,6 +1725,15 @@ def _add_generic_values(
     
     # ── Brand Type / Brand Category ───────────────────────────────
     _w("AT_BrandType",     art.get("brand_type",     ""))
+    # AT_BrandCategory — V6 sheet "2. Source Mapping related RNA", matched on
+    # Brand Code + SBU (with country and company code).  The MDD "Brand
+    # Category LOV" uses the value itself as its id ("ID - SP - NON TOP"), so
+    # it is sent as an id; an unresolved row sends nothing.
+    brand_category = (art.get("brand_category") or "").strip()
+    if brand_category:
+        _w("AT_BrandCategory", "", id_val=brand_category)
+    else:
+        log.warning("[RNA] No Brand Category resolved (article %s)", art.get("article_no"))
 
     # ── Sports Category EN ────────────────────────────────────────
     division_col = (art.get("division_col") or "").strip().lower()
@@ -1750,13 +1749,18 @@ def _add_generic_values(
                     sc_id = str(sc_id_raw).strip()
                 _w("AT_SportsCategoryEN", id_val=sc_id)
 
-    # ── Country Size ─────────────────────────────────────────────
+    # ── Country Size (UAT 15/09/2026: "refer to V6") ─────────────
+    # Attributes List v6, sheet REEBOK row 143:
+    #   Inline  → FW: US, APP: Asia, ACC: Manual Input
+    #   License → Default: EUR (Footwear); App, Acc & Sport Equipment:
+    #             Manual input
+    # This module only produces Licensed articles, so Footwear gets EUR and
+    # every other division is left blank for the MD to fill in STIBO.  The
+    # old code followed the Inline column (FW: US, APP: Asia).
+    # "EU" is the LOV id STIBO accepts for EU/EUR (the MDD sheet's "UE" is
+    # silently dropped — Airwalk and K-Swiss UAT), so it is fixed here.
     if division_col == "footwear":
-        _w("AT_CountrySize", "", id_val="US")
-    elif division_col == "apparel":
-        _w("AT_CountrySize", "", id_val="Asia")
-    else:
-        _w("AT_CountrySize", "", id_val="Manual Input")
+        _w("AT_CountrySize", "", id_val="EU")
 
     # ── UOM (Unit of Measure) ────────────────────────────────────
     uom_code = "EA"
@@ -1903,6 +1907,16 @@ def _lic_key(v) -> str:
 
 
 # recap "Gender" → (SAP Gender display, BY Gender display)
+# Ecom Gender Description EN — (SAP Gender display, SAP Age display) → value.
+# "Mapping to STIBO" rows 306-307 give one example (Men + Kids = Boys); the
+# remaining pairs follow the MDD "Gender Size Chart LOV" names Men / Women /
+# Unisex / Boys / Girls / Kids.  Keys are compared through _lic_key().
+REEBOK_ECOM_GENDER_DESC: dict[tuple[str, str], str] = {
+    ("MALE", "ADULTS"):   "Men",  ("FEMALE", "ADULTS"):   "Women", ("UNISEX", "ADULTS"):   "Unisex",
+    ("MALE", "ALLAGES"):  "Men",  ("FEMALE", "ALLAGES"):  "Women", ("UNISEX", "ALLAGES"):  "Unisex",
+    ("MALE", "CHILDREN"): "Boys", ("FEMALE", "CHILDREN"): "Girls", ("UNISEX", "CHILDREN"): "Kids",
+}
+
 LIC_GENDER_MAP: dict[str, tuple[str, str]] = {
     "MALE": ("Male", "Male"), "MAN": ("Male", "Male"), "MEN": ("Male", "Male"),
     "MENS": ("Male", "Male"), "BOY": ("Male", "Male"), "BOYS": ("Male", "Male"), "M": ("Male", "Male"),
@@ -1975,17 +1989,23 @@ def _resolve_gender_age(mapped: dict, md_mapping=None) -> None:
     if not by_g:
         by_g = sap_g
 
-    age_key = age_raw or LIC_GENDER_TO_AGE_GROUP.get(_lic_key(gender_raw), "Adult")
-    sap_a, by_a = LIC_AGE_GROUP_MAP.get(_lic_key(age_key), ("", ""))
-    if md_mapping is not None:
-        sap_a = (md_mapping.get_sap_age_lov_value(age_key)
-                 or md_mapping.get_sap_age_lov_value(gender_raw) or sap_a)
-        by_a  = (md_mapping.get_by_age_lov_value(age_key)
-                 or md_mapping.get_by_age_lov_value(gender_raw) or by_a)
-    if not sap_a:
-        sap_a = "Adults"
-    if not by_a:
-        by_a = "Kids" if sap_a == "Children" else ("All Ages" if sap_a == "All Ages" else "Adult")
+    # Age (UAT feedback 2026-09-14, confirmed on K-Swiss): a blank "Age Group"
+    # means blank SAP Age and BY Age.  MDD cardinality (SAP Age = Mandatory)
+    # is enforced inside STIBO, where the user completes it — not at
+    # ingestion — so Gender is no longer used to guess an age.
+    sap_a, by_a = "", ""
+    age_key = age_raw.strip()
+    if age_key:
+        sap_a, by_a = LIC_AGE_GROUP_MAP.get(_lic_key(age_key), ("", ""))
+        if md_mapping is not None:
+            sap_a = (md_mapping.get_sap_age_lov_value(age_key)
+                     or md_mapping.get_sap_age_lov_value(gender_raw) or sap_a)
+            by_a  = (md_mapping.get_by_age_lov_value(age_key)
+                     or md_mapping.get_by_age_lov_value(gender_raw) or by_a)
+        if not sap_a:
+            sap_a = "Adults"
+        if not by_a:
+            by_a = "Kids" if sap_a == "Children" else ("All Ages" if sap_a == "All Ages" else "Adult")
 
     mapped["sap_gender_display"] = sap_g
     mapped["by_gender_display"]  = by_g

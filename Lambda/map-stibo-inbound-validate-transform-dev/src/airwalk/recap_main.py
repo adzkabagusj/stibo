@@ -356,16 +356,49 @@ ECOM_GENDER_DESC: dict[tuple[str, str], str] = {
     ("UNISEX", "CHILDREN"): "Kids",
 }
 
-# E-com Ages Category — "Mapping to STIBO" row 311: Default "Ages 18+ years".
-# The MDD "E-com Ages Category LOV" sheet has its Code and Name columns out
-# of step (18+Y sits next to "Ages 9-12 months"), so the id is fixed here,
-# as Asics / K-Swiss / New Era do.
-ECOM_AGES_CATEGORY_DEFAULT_ID = "18+Y"
+# E-com Ages Category — Airwalk UAT (Licensed FW/App/Acc/Equipment, 1st and
+# 2nd ingestion): recap "Age Group" decides the value.
+#   Adult = Adult, Kids = Kids, All Ages = Adult, Infant = Infant,
+#   Preschool = Play School / Pre School, Grade School = Grade School
+# Ids are the letter codes from the MDD "E-com Ages Category LOV" sheet.  That
+# sheet sorts its Code and Name columns independently, so only the letter rows
+# (A/G/I/P/T/Y) are reliable — which is all this table needs.
+# "Kids" is absent on purpose: the LOV has no such value (12 age ranges plus
+# Adult, Grade School, Infant, Play School / Pre School, Toddler, Youth — see
+# the MDD sheet and the v6 "2. List of Value (LOV)" rows 2703-2720), and the
+# principal confirmed on 2026-09-21 that Kids is filled manually in STIBO.
+# A Kids article therefore sends nothing; that is the intended behaviour.
+# (display, LOV id)
+AIRWALK_ECOM_AGES_BY_AGE_GROUP: dict[str, tuple[str, str]] = {
+    "ADULT":       ("Adult",                    "A"),
+    "ALLAGES":     ("Adult",                    "A"),
+    "INFANT":      ("Infant",                   "I"),
+    "PRESCHOOL":   ("Play School / Pre School", "P"),
+    "GRADESCHOOL": ("Grade School",             "G"),
+}
 
-# Country Size — "Mapping to STIBO" row 308: Default EUR for Footwear.  The
-# MDD "Country Size LOV" lists display "EU/EUR" with id "UE"; the id is
-# resolved from that sheet at runtime and this is only the fallback.
-COUNTRY_SIZE_EUR_FALLBACK_ID = "UE"
+# Country Size — "Mapping to STIBO" row 308: Default EUR for Footwear.
+# The STIBO LOV id for EU/EUR is "EU", which is what every other module here
+# sends (astec, ellesse, lotto, the K-Swiss order form) and what UAT accepted.
+# The MDD "Country Size LOV" sheet says "UE" instead, but that is the only row
+# in the sheet whose id differs from its display (US=US, UK=UK, ASIA=ASIA,
+# NO SIZE=NS) and STIBO dropped it — UAT feedback for Airwalk was "show only
+# for APP and ACC, FW still not showing".  So the ids are fixed here and the
+# MDD is not consulted for this attribute.
+COUNTRY_SIZE_EUR_ID = "EU"
+
+# Country Size by recap "Division" — Airwalk UAT (Country Size, FW/APP/ACC):
+# Default EUR (Footwear), Apparel: Asia, Accessories and Sports Equipment:
+# No Size.  The Division column holds Footwear / Apparel / Accessories /
+# Sports Equipment (confirmed 2026-09-14); any other value sends nothing.
+# (display, LOV id)
+AIRWALK_COUNTRY_SIZE_BY_DIVISION: dict[str, tuple[str, str]] = {
+    "FOOTWEAR":        ("EU/EUR",  COUNTRY_SIZE_EUR_ID),
+    "FW":              ("EU/EUR",  COUNTRY_SIZE_EUR_ID),
+    "APPAREL":         ("ASIA",    "ASIA"),   # confirmed populated in UAT
+    "ACCESSORIES":     ("NO SIZE", "NS"),     # confirmed populated in UAT
+    "SPORTSEQUIPMENT": ("NO SIZE", "NS"),
+}
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1608,9 +1641,9 @@ def _add_generic_values(
             by_age_id = BY_AGE_LOV_ID.get(by_age, by_age.upper())
         _w("AT_BYAge", by_age, id_val=by_age_id)
 
-    # AT_PrincipalAgeDescription — the raw "Age Group" when the recap has
-    # one, otherwise the value the Age mapping resolved to.
-    age_description = art.get("age_group") or by_age
+    # AT_PrincipalAgeDescription — "Direct from Principal": the raw "Age Group"
+    # cell, blank when the recap leaves it blank (UAT feedback 2026-09-14).
+    age_description = art.get("age_group")
     if age_description:
         _w("AT_PrincipalAgeDescription", age_description)
 
@@ -1701,7 +1734,15 @@ def _add_generic_values(
     
     # ── Brand Type / Brand Category ───────────────────────────────
     _w("AT_BrandType",     art.get("brand_type",     ""))
-    # _w("AT_BrandCategory", art.get("brand_category", ""))
+    # AT_BrandCategory — V6 sheet "2. Source Mapping related RNA", matched on
+    # Brand Code + SBU (with country and company code).  The MDD "Brand
+    # Category LOV" uses the value itself as its id ("ID - SP - NON TOP"), so
+    # it is sent as an id; an unresolved row sends nothing.
+    brand_category = (art.get("brand_category") or "").strip()
+    if brand_category:
+        _w("AT_BrandCategory", "", id_val=brand_category)
+    else:
+        log.warning("[RNA] No Brand Category resolved (article %s)", art.get("article_no"))
 
     # ── Sports Category EN (UAT Result rows 53-73) ────────────────
     # License: Footwear only.  Source: recap "MD Category" → display value
@@ -1730,20 +1771,27 @@ def _add_generic_values(
             log.warning("[SportsCategory] No mapping for MD Category %r (article %s)",
                         art.get("md_category"), art.get("article_no"))
 
-    # ── Country Size ("Mapping to STIBO" row 308: default EUR, Footwear) ─
-    # The MDD "Country Size LOV" carries display "EU/EUR" with id "UE" — the
-    # old hard-coded "EU" is not a valid id, which is why it came back
-    # "Not Populated".
-    if is_footwear:
-        cs_id = ""
-        for lov_disp, lov_id in (mdd.lovs.get("Country Size", {}) if mdd else {}).items():
-            if "EUR" in _hkey(lov_disp) or _hkey(lov_disp) == "EU":
-                cs_id = str(lov_id).strip()
-                break
-        _w("AT_CountrySize", "EU/EUR", id_val=cs_id or COUNTRY_SIZE_EUR_FALLBACK_ID)
+    # ── Country Size (Airwalk UAT: Country Size, FW/APP/ACC) ─────────────
+    # Division column → Footwear = EU/EUR ("EU"), Apparel = Asia ("ASIA"),
+    # Accessories and Sports Equipment = No Size ("NS").
+    cs_rule = AIRWALK_COUNTRY_SIZE_BY_DIVISION.get(_hkey(art.get("division_col")))
+    if cs_rule:
+        cs_display, cs_id = cs_rule
+        _w("AT_CountrySize", cs_display, id_val=cs_id)
 
-    # ── E-com Ages Category ("Mapping to STIBO" row 311: default 18+) ───
-    _w("AT_EComAgesCategory", "Ages 18+ years", id_val=ECOM_AGES_CATEGORY_DEFAULT_ID)
+    # ── E-com Ages Category (Airwalk UAT: from recap "Age Group") ───────
+    # A blank Age Group leaves this blank, like every other Age Group driven
+    # attribute.  The old code sent "Ages 18+ years" for every article.
+    age_group_key = _hkey(art.get("age_group"))
+    eca_rule = AIRWALK_ECOM_AGES_BY_AGE_GROUP.get(age_group_key)
+    if eca_rule:
+        eca_display, eca_id = eca_rule
+        _w("AT_EComAgesCategory", eca_display, id_val=eca_id)
+    elif age_group_key:
+        # "Kids" lands here by design (manual input in STIBO); anything else is
+        # an Age Group value outside the UAT table and worth seeing in the log.
+        log.info("[EComAges] Age Group %r sends no E-com Ages Category (article %s)",
+                 art.get("age_group"), art.get("article_no"))
 
     # ── Ecom Gender Description EN ("Mapping to STIBO" rows 312-313) ────
     # SAP Gender display + SAP Age display → Men / Women / Unisex / Boys /
@@ -1904,7 +1952,7 @@ def _resolve_gender_age(mapped: dict, md_mapping=None) -> None:
     Priority is the brand-mapping workbook ("Airwalk MD Mapping" tab) when it
     has a row for the value, then the tables transcribed from the "BY Age &
     Gender" sheet.  Gender drives Gender; the recap "Age Group" column drives
-    Age, and only when that column is absent does Gender stand in for it.
+    Age.  A blank Age Group leaves SAP Age and BY Age blank.
     """
     gender_raw = mapped.get("gender_raw", "") or ""
     age_raw    = mapped.get("age_group", "") or ""
@@ -1918,17 +1966,23 @@ def _resolve_gender_age(mapped: dict, md_mapping=None) -> None:
     if not by_g:
         by_g = sap_g
 
-    age_key = age_raw or AIRWALK_GENDER_TO_AGE_GROUP.get(_hkey(gender_raw), "Adult")
-    sap_a, by_a = AIRWALK_AGE_GROUP_MAP.get(_hkey(age_key), ("", ""))
-    if md_mapping is not None:
-        sap_a = (md_mapping.get_sap_age_lov_value(age_key)
-                 or md_mapping.get_sap_age_lov_value(gender_raw) or sap_a)
-        by_a  = (md_mapping.get_by_age_lov_value(age_key)
-                 or md_mapping.get_by_age_lov_value(gender_raw) or by_a)
-    if not sap_a:
-        sap_a = "Adults"
-    if not by_a:
-        by_a = "Kids" if sap_a == "Children" else ("All Ages" if sap_a == "All Ages" else "Adult")
+    # Age (UAT feedback 2026-09-14, confirmed on K-Swiss): a blank "Age Group"
+    # means blank SAP Age and BY Age.  MDD cardinality (SAP Age = Mandatory)
+    # is enforced inside STIBO, where the user completes it — not at
+    # ingestion — so Gender is no longer used to guess an age.
+    sap_a, by_a = "", ""
+    age_key = age_raw.strip()
+    if age_key:
+        sap_a, by_a = AIRWALK_AGE_GROUP_MAP.get(_hkey(age_key), ("", ""))
+        if md_mapping is not None:
+            sap_a = (md_mapping.get_sap_age_lov_value(age_key)
+                     or md_mapping.get_sap_age_lov_value(gender_raw) or sap_a)
+            by_a  = (md_mapping.get_by_age_lov_value(age_key)
+                     or md_mapping.get_by_age_lov_value(gender_raw) or by_a)
+        if not sap_a:
+            sap_a = "Adults"
+        if not by_a:
+            by_a = "Kids" if sap_a == "Children" else ("All Ages" if sap_a == "All Ages" else "Adult")
 
     mapped["sap_gender_display"] = sap_g
     mapped["by_gender_display"]  = by_g

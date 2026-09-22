@@ -296,20 +296,85 @@ ASTEC_MATERIAL_TYPE_LOV: dict[str, str] = {
 ASTEC_DEFAULT_MATERIAL_TYPE = "ZINA"
 
 # ── Lotto Category → Sports Category EN display value ────────────
+# recap "MD Category" → Sports Category EN display value.
+# Source: "Astec Mapping Issues and References.xlsx" → "UAT Result" row 53
+# (License, Product Division Footwear; APP/ACC/Equipment filled manually).
+# Keys are compared through _sports_cat_display(), which ignores case and
+# spaces.  The Sports Category LOV id is resolved from the MDD in XML.
 LOV_SPORTS_CATEGORY_EN: dict[str, str] = {
-    "BADMINTON":    "Tennis / Padel",
-    "CASUAL":       "Lifestyle / Casual",
-    "FUTSAL":       "Soccer",
-    "HIKING":       "Outdoor / Trail / Hiking",
-    "KIDS":         "Lifestyle / Casual",
-    "LIFESTYLE":    "Lifestyle / Casual",
-    "OUTDOOR":      "Outdoor / Trail / Hiking",
-    "OUTDOOR SHOE": "Outdoor / Trail / Hiking",
-    "PADEL":        "Tennis / Padel",
-    "RUNNING":      "Running",
-    "SANDALS":      "Other",
-    "SOCCER":       "Soccer",
-    "TENNIS":       "Tennis / Padel",
+    "CASUAL":           "Lifestyle / Casual",
+    "BASKETBALL":       "Basketball",
+    "LIFESTYLE":        "Lifestyle / Casual",
+    "SOCCER":           "Soccer",
+    "FITNESS":          "Fitness / Training",
+    "KIDS":             "Lifestyle / Casual",
+    "TENNIS/BADMINTON": "Tennis / Padel",
+    "TENNIS":           "Tennis / Padel",
+    "BADMINTON":        "Badminton",
+    "OUTDOOR":          "Outdoor / Trail / Hiking",
+    "RUNNING":          "Running",
+    "SANDAL":           "Lifestyle / Casual",
+    "SKATE":            "Skateboarding",
+}
+
+
+# recap "Color" → AT_TechSAPColorDesc LOV id.
+# Exported from the STIBO Workbench LOV on 2026-09-22 and keyed by the display
+# with case, spaces and punctuation removed, so the two dirty entries in that
+# LOV ("RED ." and "TAN.") still resolve.  The MDD is not the source here: it
+# disagrees with STIBO on this list (PPL vs PUR for purple).
+# BLACK, FUSCHIA and TURQOISE are aliases for spellings the recap uses.
+TECH_SAP_COLOR_ID: dict[str, str] = {
+    "AIRFORCE": "AFC", "ANTHRACITE": "ANT", "AQUA": "AQU", "AUBERGINE": "AUB",
+    "BABYPINK": "BPK", "BEIGE": "BEG", "BLACK": "BLK", "BLACKSTRIPES": "BST",
+    "BLK": "BLK", "BLUE": "BLU", "BLUESTRIPE": "BLS", "BOTTLEGREEN": "BGR",
+    "BRONZE": "BRZ", "BROWN": "BRN", "BROWNSTRIPE": "BRS", "BURGUNDY": "BGY",
+    "BURNTORANGE": "BOR", "BUTTERSCOTCH": "BSC", "CAMEL": "CAM", "CANDYPINK": "CPK",
+    "CERISE": "CRS", "CHAMPAGNE": "CPN", "CHARCOAL": "CHA", "CHARTREUSE": "CRT",
+    "CHOCOLATE": "CHB", "COBALT": "CBT", "COPPER": "CPR", "CREAM": "CRM",
+    "DARKBLUE": "DBL", "DARKCHARCOAL": "DCH", "DARKGREEN": "DGN", "DARKRED": "DRD",
+    "DENIM": "DNM", "DOVEGREY": "DGY", "DUSTYPINK": "DPK", "EMERALD": "EME",
+    "EMERALDGREEN": "EGR", "FUCHSIA": "FCH", "FUSCHIA": "FCH", "GOLD": "GLD",
+    "GRAPE": "GRP", "GREEN": "GRN", "GREENMD": "GMD", "GREENSTRIPE": "GST",
+    "GREY": "GRY", "GREYSTRIPE": "GSP", "GUNMETAL": "GMT", "INDIGO": "IND",
+    "INK": "INK", "IVORY": "IVO", "KHAKI": "KHA", "LAVENDER": "LAV",
+    "LEMON": "LEM", "LIGHTGREY": "LGY", "LIGHTRED": "LRD", "LILAC": "LLC",
+    "LIME": "LIM", "MAGENTA": "MAG", "MAROON": "MAR", "MAUVE": "MAV",
+    "MELANGE": "MEL", "MINT": "MNT", "MOCHA": "MCH", "MULTISTRIPE": "MSR",
+    "MUSHROOM": "MUS", "MUSTARD": "MST", "NATURAL": "NAT", "NAVY": "NVY",
+    "NAVYSTRIPE": "NST", "NOCOLOR": "NOO", "OLIVE": "OLV", "ORANGE": "ORG",
+    "OXBLOOD": "OXB", "PALEBLUE": "PBL", "PALEPINK": "PPK", "PALEYELLOW": "PYL",
+    "PEACH": "PCH", "PEWTER": "PWT", "PINK": "PNK", "PINKSTRIPE": "PKS",
+    "PISTACHIO": "PTC", "PLUM": "PLM", "PURPLE": "PUR", "PURPLESTRIPE": "PPS",
+    "RED": "RED", "REDSTRIPE": "RES", "ROSE": "ROS", "RUBY": "RUB",
+    "RUST": "RST", "SAGE": "SGE", "SALMON": "SLM", "SAND": "SND",
+    "SILVER": "SLV", "SKYBLUE": "SKY", "TAN": "TAN", "TANGERINE": "TRN",
+    "TAUPE": "TPE", "TEAL": "TEL", "TURQOISE": "TRQ", "TURQUOISE": "TRQ",
+    "VIOLET": "VIO", "WHITE": "WHT", "WHITESTRIPES": "WHS", "YELLOW": "YLW",
+    "YELLOWSTRIPE": "YLS",
+}
+
+
+def _sports_cat_display(raw: str) -> str:
+    """recap MD Category → Sports Category EN display ('' when unmapped)."""
+    key = re.sub(r"[^A-Z0-9/]", "", (raw or "").upper())
+    return LOV_SPORTS_CATEGORY_EN.get(key, "")
+
+
+# Sports Category EN display → LOV id, from the MDD sheet "Sports Category LOV"
+# (columns: Sports Category Name | ID).  The MDD is still read first, but this
+# table keeps the attribute populated when the workbook is missing at the
+# Lambda or spells a display value slightly differently.
+SPORTS_CATEGORY_LOV_ID: dict[str, str] = {
+    "Badminton":                "1",
+    "Basketball":               "2",
+    "Fitness / Training":       "4",
+    "Lifestyle / Casual":       "6",
+    "Running":                  "7",
+    "Soccer":                   "8",
+    "Tennis / Padel":           "10",
+    "Outdoor / Trail / Hiking": "12",
+    "Skateboarding":            "13",
 }
 
 
@@ -485,8 +550,21 @@ class MDDLoader:
                 continue
             display = sn.replace(" LOV", "").replace("LOV ", "").strip()
             
+            # "Color Code LOV" is the one sheet stored as "code | description"
+            # (12W | BLUE) instead of "display | id".  Read the other way round
+            # and key it by the normalised colour name, which is what the recap
+            # gives us.  Every other sheet keeps the original handling.
+            is_colour_sheet = sn.strip().upper() == "COLOR CODE LOV"
+
             for row in rows[1:]:
                 if not row or len(row) < 2:
+                    continue
+                if is_colour_sheet:
+                    code, colour_name = row[0], row[1]
+                    if code and colour_name:
+                        self.lovs.setdefault(display, {}).setdefault(
+                            _hkey(colour_name), str(code).strip()
+                        )
                     continue
                 name, code = row[0], row[1]
                 if name:
@@ -867,6 +945,17 @@ def _hkey(v) -> str:
     return re.sub(r"[^A-Z0-9]", "", str(v or "").upper())
 
 
+# Country Size by recap "Division" — V6 sheet ASTEC row 143 (License):
+# Default: EUR (Footwear), Apparel: Asia, Accessories: No Size.
+# Keys are compared through _hkey().  (display, LOV id)
+ASTEC_COUNTRY_SIZE_BY_DIVISION: dict[str, tuple[str, str]] = {
+    "FOOTWEAR":    ("EU/EUR",  "EU"),
+    "FW":          ("EU/EUR",  "EU"),
+    "APPAREL":     ("ASIA",    "ASIA"),
+    "ACCESSORIES": ("NO SIZE", "NS"),
+}
+
+
 def _cell(recap_row, *names: str) -> str:
     """First non-blank cell whose header matches one of *names* (via _hkey)."""
     want = {_hkey(n) for n in names}
@@ -1157,6 +1246,11 @@ def map_article_astec(recap_row: dict, brand_code: str = "ASC") -> dict:
     category     = _s(recap_row.get("Category"))
     division_col = _s(recap_row.get("Division") or "")  # Read Division column from Excel
     size_range   = _s(recap_row.get("Size Range"))
+    # "Mapping to STIBO" row 36 — Principal Style Description: "Manual Input &
+    # Direct from Principal".  The real recap header misspells it, so both
+    # spellings are accepted; a blank cell sends nothing.
+    style_desc   = _cell(recap_row, "Principal Style Description",
+                         "Principal Style Decription", "Principal Style Desc")
     outsole      = _s(recap_row.get("Outsole \nMaterial") or recap_row.get("Outsole Material") or "")
     upper        = _s(recap_row.get("Upper \nMaterial") or recap_row.get("Upper Material") or "")
     supplier     = _s(recap_row.get("Supplier"))
@@ -1208,14 +1302,6 @@ def map_article_astec(recap_row: dict, brand_code: str = "ASC") -> dict:
     # Generate model name (AI-generated format per attributes list)
     # Example: "LOTTO FH240429 MALE BLACK"
     model_name = f"ASTEC {supp_art} {gender.upper()} {color.upper()}".strip()
-
-    # AT_GenericDescription — "Mapping to STIBO" row 62: MAA Generic
-    # Description Mapping = 3-digit brand code + Principal style + (Age/Gender)
-    # + Color, max 40 characters.  The recap "Gender" column already carries
-    # the Age/Gender token (Men / Women / Boys / Girls / Kids …).
-    generic_desc = " ".join(
-        p for p in (brand_code[:3].upper(), supp_art.upper(), gender.upper(), color.upper()) if p
-    )[:40].strip()
 
     # ── New InboundGenericCode formula ─────────────────────────────
     # 3-char Brand Code + 1-char Article Type + 1-digit Year
@@ -1304,8 +1390,9 @@ def map_article_astec(recap_row: dict, brand_code: str = "ASC") -> dict:
         "article_no":        supp_art,
         "sap_style_code":    generic_code[3:],           # Derived SAP Style Code
         "model_name":        model_name,
-        "generic_desc":      generic_desc,               # -> AT_GenericDescription
         "brand_code":        brand_code,
+
+        "style_desc":        style_desc,         # Principal Style Description column
 
         # Colour
         "colour":            color,
@@ -1325,7 +1412,7 @@ def map_article_astec(recap_row: dict, brand_code: str = "ASC") -> dict:
         "div_letter":        div_letter,         # SAP division letter
         "category":          category,           # OUTDOOR, CASUAL, KIDS, etc.
         "sub_category":      "",
-        "sports_cat_en":     LOV_SPORTS_CATEGORY_EN.get((category or "").strip().upper(), ""),
+        "sports_cat_en":     _sports_cat_display(md_category),   # MD Category (UAT row 53)
 
         # Commercial
         "article_type":      by_art_type,        # License
@@ -1493,25 +1580,28 @@ def _add_generic_values(
     _w("AT_PrincipalColorName",  art["colour"])
     _w("AT_PrincipalColorCode",  art["colour_code"])
     _w("AT_SAPStyleCode",        art["sap_style_code"])
-    
+    # AT_PrincipalStyleDescription feeds the STIBO Generic Description formula
+    # (brand code + principal style description + (age/gender) + colour).
+    if art.get("style_desc"):
+        _w("AT_PrincipalStyleDescription", art["style_desc"])
+
     # AT_PrincipalSize → Size range
     if art.get("size_range"):
         _w("AT_PrincipalSize", art["size_range"])
 
-    # ── Colour (SAP Color) ───────────────────────────────────────
-    colour_id = ""
-    if mdd:
-        color_lov = mdd.lovs.get("Color Code", {})
-        colour_id = color_lov.get(art["colour"], "") \
-                or color_lov.get(art["colour"].upper(), "")
-
-    if colour_id:
-        if colour_id.isdigit():
-            colour_id = colour_id.zfill(3)
-        _w("AT_Color", id_val=colour_id)
-    # else:
-    #     _w("AT_Color", value=art["colour"].upper())
-    # else: skip AT_Color — invalid to send raw color name as LOV value
+    # ── Colour ───────────────────────────────────────────────────
+    # AT_Color (SAP Color) is deliberately NOT sent: the business asked for it
+    # to stay empty.  STIBO derives AT_TechSAPColorDesc from AT_Color, so with
+    # AT_Color gone that derivation never runs and the Generic Description
+    # formula — VALUELOVID('AT_TechSAPColorDesc') — would have nothing to read.
+    # The attribute is therefore written here directly from the recap "Color"
+    # column.  A colour the LOV does not carry is left blank and logged.
+    tech_colour_id = TECH_SAP_COLOR_ID.get(_hkey(art.get("colour")), "")
+    if tech_colour_id:
+        _w("AT_TechSAPColorDesc", id_val=tech_colour_id)
+    elif art.get("colour"):
+        log.warning("[Color] No AT_TechSAPColorDesc LOV id for colour=%r (article %s)",
+                    art["colour"], art.get("article_no"))
 
 
     # AT_InboundGenericCode — same formula as KEY_InboundArticle
@@ -1520,10 +1610,9 @@ def _add_generic_values(
     _w("AT_InboundGenericCode", at_generic_val)
     _w("AT_Generic", at_generic_val)
 
-    # AT_GenericDescription — brand code + Principal style + (Age/Gender)
-    # + Color, max 40 chars (Mapping to STIBO row 62).
-    if art.get("generic_desc"):
-        _w("AT_GenericDescription", art["generic_desc"])
+    # AT_GenericDescription is not sent: it is "Formula in System" and STIBO
+    # derives it from AT_Generic / AT_SAPStyleCode / Age / Gender / Colour,
+    # exactly as for the UAT-confirmed Lotto recap.
 
     # ── Gender (UAT: SAP Gender / BY Gender "Not Populated") ─────
     # Source: recap "Gender"; mapping: sheet "BY Age & Gender".  Both are
@@ -1563,9 +1652,9 @@ def _add_generic_values(
             by_age_id = BY_AGE_LOV_ID.get(by_age, by_age.upper())
         _w("AT_BYAge", by_age, id_val=by_age_id)
 
-    # AT_PrincipalAgeDescription — the raw "Age Group" when the recap has
-    # one, otherwise the value the Age mapping resolved to.
-    age_description = art.get("age_group") or by_age
+    # AT_PrincipalAgeDescription — "Direct from Principal": the raw "Age Group"
+    # cell, blank when the recap leaves it blank (UAT feedback 2026-09-14).
+    age_description = art.get("age_group")
     if age_description:
         _w("AT_PrincipalAgeDescription", age_description)
 
@@ -1656,27 +1745,55 @@ def _add_generic_values(
     
     # ── Brand Type / Brand Category ───────────────────────────────
     _w("AT_BrandType",     art.get("brand_type",     ""))
-    # _w("AT_BrandCategory", art.get("brand_category", ""))
+    # AT_BrandCategory — V6 sheet "2. Source Mapping related RNA", matched on
+    # Brand Code + SBU (with country and company code).  The MDD "Brand
+    # Category LOV" uses the value itself as its id ("ID - SP - NON TOP"), so
+    # it is sent as an id; an unresolved row sends nothing.
+    brand_category = (art.get("brand_category") or "").strip()
+    if brand_category:
+        _w("AT_BrandCategory", "", id_val=brand_category)
+    else:
+        log.warning("[RNA] No Brand Category resolved (article %s)", art.get("article_no"))
 
     # ── Sports Category EN ────────────────────────────────────────
-    # Only include if Division column says "footwear"
+    # UAT rule: License, Product Division Footwear, source = recap "MD Category"
+    # (1st and 2nd ingestion).  APP / ACC / Equipment are filled manually by MD,
+    # so nothing is sent for them.  The id comes from the MDD "Sports Category
+    # LOV" sheet when it is readable and from SPORTS_CATEGORY_LOV_ID otherwise,
+    # compared without regard to case or spacing.
     division_col = (art.get("division_col") or "").strip().lower()
-    if division_col == "footwear":
+    if division_col in ("footwear", "fw"):
         sc_display = art.get("sports_cat_en", "")
-        if sc_display and mdd:
-            sc_lov    = mdd.lovs.get("Sports Category", {})
-            sc_id_raw = sc_lov.get(sc_display, "")
+        if sc_display:
+            sc_id_raw = ""
+            for lov_disp, lov_id in (mdd.lovs.get("Sports Category", {}) if mdd else {}).items():
+                if _hkey(lov_disp) == _hkey(sc_display) and str(lov_id).strip():
+                    sc_id_raw = str(lov_id).strip()
+                    break
+            sc_id_raw = sc_id_raw or SPORTS_CATEGORY_LOV_ID.get(sc_display, "")
             if sc_id_raw:
                 try:
                     sc_id = str(int(sc_id_raw)).zfill(2)
                 except (ValueError, TypeError):
                     sc_id = str(sc_id_raw).strip()
                 _w("AT_SportsCategoryEN", id_val=sc_id)
+            else:
+                log.warning("[SportsCategory] %r has no LOV id (article %s)",
+                            sc_display, art.get("article_no"))
+        elif art.get("md_category"):
+            log.warning("[SportsCategory] No mapping for MD Category %r (article %s)",
+                        art.get("md_category"), art.get("article_no"))
 
     # ── Country Size ─────────────────────────────────────────────
-    # Only include if Division column says "footwear" (case-insensitive)
-    if division_col == "footwear":
-        _w("AT_CountrySize", "", id_val="EU")
+    # V6 sheet ASTEC row 143 (License): Footwear = EUR, Apparel = Asia,
+    # Accessories = No Size.  Sports Equipment is not named in the rule, so
+    # it — like any other Division value — sends nothing.  Ids are fixed here
+    # rather than read from the MDD: its "Country Size LOV" sheet gives
+    # EU/EUR the id "UE", which STIBO drops.
+    cs_rule = ASTEC_COUNTRY_SIZE_BY_DIVISION.get(_hkey(art.get("division_col")))
+    if cs_rule:
+        cs_display, cs_id = cs_rule
+        _w("AT_CountrySize", "", id_val=cs_id)
 
     # ── UOM (Unit of Measure) ────────────────────────────────────
     uom_code = "EA"
@@ -1818,7 +1935,7 @@ def _resolve_gender_age(mapped: dict, md_mapping=None) -> None:
     Priority is the brand-mapping workbook ("Astec MD Mapping" tab) when it
     has a row for the value, then the tables transcribed from the "BY Age &
     Gender" sheet.  Gender drives Gender; the recap "Age Group" column drives
-    Age, and only when that column is absent does Gender stand in for it.
+    Age.  A blank Age Group leaves SAP Age and BY Age blank.
     """
     gender_raw = mapped.get("gender_raw", "") or ""
     age_raw    = mapped.get("age_group", "") or ""
@@ -1832,17 +1949,23 @@ def _resolve_gender_age(mapped: dict, md_mapping=None) -> None:
     if not by_g:
         by_g = sap_g
 
-    age_key = age_raw or ASTEC_GENDER_TO_AGE_GROUP.get(_hkey(gender_raw), "Adult")
-    sap_a, by_a = ASTEC_AGE_GROUP_MAP.get(_hkey(age_key), ("", ""))
-    if md_mapping is not None:
-        sap_a = (md_mapping.get_sap_age_lov_value(age_key)
-                 or md_mapping.get_sap_age_lov_value(gender_raw) or sap_a)
-        by_a  = (md_mapping.get_by_age_lov_value(age_key)
-                 or md_mapping.get_by_age_lov_value(gender_raw) or by_a)
-    if not sap_a:
-        sap_a = "Adults"
-    if not by_a:
-        by_a = "Kids" if sap_a == "Children" else ("All Ages" if sap_a == "All Ages" else "Adult")
+    # Age (UAT feedback 2026-09-14, confirmed on K-Swiss): a blank "Age Group"
+    # means blank SAP Age and BY Age.  MDD cardinality (SAP Age = Mandatory)
+    # is enforced inside STIBO, where the user completes it — not at
+    # ingestion — so Gender is no longer used to guess an age.
+    sap_a, by_a = "", ""
+    age_key = age_raw.strip()
+    if age_key:
+        sap_a, by_a = ASTEC_AGE_GROUP_MAP.get(_hkey(age_key), ("", ""))
+        if md_mapping is not None:
+            sap_a = (md_mapping.get_sap_age_lov_value(age_key)
+                     or md_mapping.get_sap_age_lov_value(gender_raw) or sap_a)
+            by_a  = (md_mapping.get_by_age_lov_value(age_key)
+                     or md_mapping.get_by_age_lov_value(gender_raw) or by_a)
+        if not sap_a:
+            sap_a = "Adults"
+        if not by_a:
+            by_a = "Kids" if sap_a == "Children" else ("All Ages" if sap_a == "All Ages" else "Adult")
 
     mapped["sap_gender_display"] = sap_g
     mapped["by_gender_display"]  = by_g

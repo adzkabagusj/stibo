@@ -107,7 +107,8 @@ BRAND_ROUTER = {
     "crocs":  crocs_handler.lambda_handler,
     "2xu":    twoxu_handler.lambda_handler,   # S3 folder: raw/metadata/2xu/
     "lotto":  lotto_handler.lambda_handler,
-    "onr":    onr_handler.lambda_handler,     # S3 folder: raw/metadata/onr/ (ON Running)
+    "onr":    onr_handler.lambda_handler,     
+    "on-running": onr_handler.lambda_handler,
     "nike":   nike_handler.lambda_handler,
     "dr-martens": dr_marten_handler.lambda_handler,  # S3 folder: raw/metadata/dr-marten/
     "staccato": staccato_handler.lambda_handler,

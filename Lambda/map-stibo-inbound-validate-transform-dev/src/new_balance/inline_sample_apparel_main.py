@@ -303,6 +303,26 @@ DIVISION_PARENT_MAP: dict[str, str] = {
     "EQUIPMENT":   "Q", "TOYS":     "T",
 }
 
+# ── Generic Description Color mapping ────────────────────────────────────────
+# Maps SAP Color name → Generic Description Color code (screenshot mapping table)
+# SAP Color ID 000 / name "NO COLOR" → Generic Desc Color "NOO"
+GENERIC_DESC_COLOR_MAP: dict[str, str] = {
+    "NO COLOR": "NOO",
+    "BLACK":    "BK",  "WHITE":    "WH",  "GREY":    "GY",
+    "BLUE":     "BL",  "GREEN":    "GN",  "RED":     "RD",
+    "BEIGE":    "BE",  "BROWN":    "BR",  "YELLOW":  "YL",
+    "ORANGE":   "OR",  "PINK":     "PK",  "PURPLE":  "PL",
+}
+
+# ── Generic Description Age label mapping ────────────────────────────────────
+# Maps SAP Age LOV code → short label used inside generic description
+# (differs from MDD LOV full names — matches "mapping awal" per MAA comment)
+GENERIC_DESC_AGE_LABEL: dict[str, str] = {
+    "AD": "AD",  # Adults
+    "CH": "K",   # Children → K (Kids) in generic description
+    "AA": "AA",  # All Ages
+}
+
 # SAP Size default (v6 R041 — one variant per sample row → SS;
 # MDD Size Code LOV: description "SS" ↔ code "0SS")
 SAP_SIZE_SS          = ("0SS", "SS")
@@ -708,26 +728,39 @@ def _build_variant_code(generic_code: str, sap_color_id: str, sap_size_id: str) 
 
 
 def _build_generic_description(
-    brand_code: str, display_name: str,
+    brand_code: str, style_desc: str,
     age_code: str, gender_code: str, sap_color_name: str,
 ) -> str:
     """
     BM row 25 / v6 R037: MAA Generic Description Mapping —
     max 40 chars: 3-digit brand code + Principal style + (Age/Gender) + Color.
 
-    Issue #2 fix: "Principal style" now uses the Product Display Name
-    (not the SAP-style principal_style_code), and Age/Gender is rendered
-    in the parenthesised format (AgeCode/GenderCode) using the LOV codes
-    (e.g. AD/M, AD/U, CH/U).
+    Issue #3 fix (24-09-2026):
+    - "Principal style" uses the full AT_PrincipalStyleDescription value
+      (i.e. "SPL SP27 Product Display Name"), not the raw display_name.
+    - Age label uses GENERIC_DESC_AGE_LABEL mapping (K for Children, AD for Adults)
+      to match "mapping awal" per MAA comment.
+    - Color uses GENERIC_DESC_COLOR_MAP (e.g. NO COLOR → NOO), not SAP Color name.
+    Example output: "NEW SPL SP27 Sport Short 5\" (AD/U) NOO"
+    If the result exceeds 40 chars the Principal style is progressively
+    trimmed from the right until it fits.
     """
-    age_gender = f"({age_code}/{gender_code})" if age_code and gender_code else ""
-    parts = (
-        _clean(brand_code)[:3],
-        (display_name or "").strip(),
-        age_gender,
+    age_label_desc = GENERIC_DESC_AGE_LABEL.get(age_code, age_code)
+    age_gender     = f"({age_label_desc}/{gender_code})" if age_code and gender_code else ""
+    color_desc     = GENERIC_DESC_COLOR_MAP.get(
+        (sap_color_name or "").strip().upper(),
         (sap_color_name or "").strip().upper(),
     )
-    return " ".join(p for p in parts if p)[:MAX_GENERIC_DESC_LEN]
+    prefix = _clean(brand_code)[:3]
+    suffix = " ".join(p for p in (age_gender, color_desc) if p)
+    style  = (style_desc or "").strip()
+    result = " ".join(p for p in (prefix, style, suffix) if p)
+    if len(result) <= MAX_GENERIC_DESC_LEN:
+        return result
+    fixed_len  = len(prefix) + (1 if prefix else 0) + len(suffix) + (1 if suffix else 0)
+    avail      = MAX_GENERIC_DESC_LEN - fixed_len
+    style_trim = style[:max(0, avail)].rstrip()
+    return " ".join(p for p in (prefix, style_trim, suffix) if p)[:MAX_GENERIC_DESC_LEN]
 
 
 def _build_variant_description(generic_desc: str, sap_size_name: str) -> str:
@@ -977,10 +1010,18 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
 
     # ── Principal style — THE SAMPLE "S" PREFIX (BM row 14) ────────
     _val(vals_el, "AT_PrincipalStyleCode", art["principal_style_code"])
-    # Issue #1: v6 R027 notes — SPL + Season + Product Display Name
-    sea_for_desc = art.get("season", "") or ""
-    raw_desc     = art["display_name"] or art["sku"]
-    style_desc   = f"SPL {sea_for_desc} {raw_desc}".strip() if sea_for_desc else raw_desc
+    # Issue #2 (24-09-2026): SPL + Season (2-digit code + 2-digit year) + Product Display Name
+    # Issue #2 (24-09-2026): SPL + Season (2-digit season code + 2-digit year, e.g. SP27)
+    # Normalize: SP2027 → SP27 (take first 2 chars + last 2 chars of the season string)
+    sea_raw_full = art.get("season", "") or ""
+    if len(sea_raw_full) == 6:   # e.g. "SP2027" → "SP27"
+        sea_for_desc = sea_raw_full[:2] + sea_raw_full[-2:]
+    elif len(sea_raw_full) == 4:  # already "SP27"
+        sea_for_desc = sea_raw_full
+    else:
+        sea_for_desc = sea_raw_full
+    raw_desc   = art["display_name"] or art["sku"]
+    style_desc = f"SPL {sea_for_desc} {raw_desc}".strip() if sea_for_desc else raw_desc
     _val(vals_el, "AT_PrincipalStyleDescription", style_desc)
 
     # ── Principal colour (App/Acc — v6 R028 / R029) ────────────────
@@ -998,8 +1039,15 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
     _val(vals_el, "AT_SAPStyleCode", art["sap_style_code"])
     _val(vals_el, "AT_Generic",      art["generic_code"])
     _val(vals_el, "AT_Variant",      art["variant_code"])
-    _val(vals_el, "AT_GenericDescription", art["generic_desc"])
-    _val(vals_el, "AT_VariantDescription",  art["variant_desc"])
+    # Issue #3 (24-09-2026): Generic description uses full style_desc (SPL+Season+DisplayName),
+    # GENERIC_DESC_AGE_LABEL (K for Children), and GENERIC_DESC_COLOR_MAP (NOO for NO COLOR)
+    gen_desc_color = art["sap_color_name"]
+    recomputed_generic_desc = _build_generic_description(
+        art["brand_code"], style_desc,
+        art["age_code"], art["gender_code"], gen_desc_color,
+    )
+    _val(vals_el, "AT_GenericDescription", recomputed_generic_desc)
+    _val(vals_el, "AT_VariantDescription",  _build_variant_description(recomputed_generic_desc, art["sap_size_name"]))
 
     # ── SAP color (Color Family → Color Code LOV) / SAP size ───────
     if art["sap_color_id"]:
@@ -1059,13 +1107,18 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
     _val(vals_el, "AT_InboundGenericCode", art["inbound_key"])
 
     # ── Issue #3: Pricing Distribution Channel — Default: Retailer ─
-    _val(vals_el, "AT_PricingDistributionChannel", "Retailer")
+    # ── Issue #3 (fix 24-09-2026): Pricing Distribution Channel — LOV: Retail = 01
+    # LOV: Online=03  Retail=01  Wholesale=02  — default for Sample is Retail
+    _val(vals_el, "AT_PricingDistributionChannel", "Retail", id_val="01")
 
-    # ── Issue #4: MC Structure (Merchandise Category) — Default: Sample
-    _val(vals_el, "AT_MerchandiseCategory", "Sample")
+    # ── Issue #4 (24-09-2026): MC Structure — Sample MC LOV ID
+    # Format: DivisionLetter + ZYZY + BrandCode + Flag
+    # Apparel (A): CLH_AZYZY → LOV ID AZYZYNEWA
+    _val(vals_el, "AT_MerchandiseCategory", "SAMPLE", id_val="AZYZYNEWA")
 
-    # ── Issue #5: BY Sub Category — Default: Sample ────────────────
-    _val(vals_el, "AT_BYSubCategory", "Sample")
+    # ── Issue #5 (24-09-2026): BY Sub Category — Apparel Sample hierarchy
+    # BY Hierarchy: MA_NEW_A_ZY_ZY_ZY → "Apparel Sample"
+    _val(vals_el, "AT_BYSubCategory", "Apparel Sample", id_val="MA_NEW_A_ZY_ZY_ZY")
 
     country_val = art.get("country_code", "")
     if country_val:

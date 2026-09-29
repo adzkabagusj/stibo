@@ -51,6 +51,10 @@ COLUMN → ATTRIBUTE MAP (footwear sheet — every mapped column)
     Country of Origin     → AT_CountryOrigin = CN / China           [v6 R054]
     Merch Hierarchy L1    → "Footwear"                              [v6 R091]
     SAP Color             → AT_Color = 000 / NO COLOR               [v6 R040]
+    Tech SAP Color Desc   → AT_TechSAPColorDesc = NOO / NO COLOR
+                            (Issue #8 28-09-2026 — colour code read by the
+                            STEP Generic Description derive, emitted
+                            directly astec-style)
     SAP Size              → AT_Size  = 0SS / SS                     [v6 R041]
 
 ────────────────────────────────────────────────────────────────────────
@@ -254,25 +258,40 @@ MAX_GENERIC_DESC_LEN      = 40
 MAX_VARIANT_DESC_LEN      = 40
 MAX_GENDER_DESC_CHARS     = 10   # MDD AT_PrincipalGenderDescription
 
-# ── Generic Description Color mapping ────────────────────────────────────────
-# Maps SAP Color name → Generic Description Color code (screenshot mapping table)
-# SAP Color ID 000 / name "NO COLOR" → Generic Desc Color "NOO"
-GENERIC_DESC_COLOR_MAP: dict[str, str] = {
-    "NO COLOR": "NOO",
-    "BLACK":    "BK",  "WHITE":    "WH",  "GREY":    "GY",
-    "BLUE":     "BL",  "GREEN":    "GN",  "RED":     "RD",
-    "BEIGE":    "BE",  "BROWN":    "BR",  "YELLOW":  "YL",
-    "ORANGE":   "OR",  "PINK":     "PK",  "PURPLE":  "PL",
+# ── Generic Description age / gender labels (Issue #8, 28-09-2026) ──────────
+# Aligned with the STEP Generic Description derive ("mapping awal"):
+# IF SAPAge = 'CH' → 'K', 'AD' → 'A', 'AA' → 'O'; IF Gender = 'F' → 'W'
+# (Womens). M / U pass through unchanged. The colour token comes from
+# TECH_SAP_COLOR_ID (the AT_TechSAPColorDesc LOV) further below.
+GENERIC_DESC_AGE_LABEL: dict[str, str] = {
+    "AD": "A",   # Adults
+    "CH": "K",   # Children → K (Kids)
+    "AA": "O",   # All Ages
 }
 
-# ── Generic Description Age label mapping ────────────────────────────────────
-# Maps SAP Age LOV code → short label used inside generic description
-# (differs from the MDD LOV full names — matches "mapping awal" per MAA comment)
-GENERIC_DESC_AGE_LABEL: dict[str, str] = {
-    "AD": "AD",  # Adults
-    "CH": "K",   # Children → K (Kids) in generic description
-    "AA": "AA",  # All Ages
+GENERIC_DESC_GENDER_LABEL: dict[str, str] = {
+    "F": "W",    # Female → W (Womens); M / U pass through
 }
+
+# ── AT_TechSAPColorDesc — Generic Description colour code ───────────────────
+# The STEP Generic Description derive reads VALUELOVID('AT_TechSAPColorDesc')
+# (brand + principal style description + (age/gender) + colour code).  Issue #8
+# (28-09-2026): emit the attribute directly — same pattern as astec
+# (TECH_SAP_COLOR_ID, exported from the STEP Workbench LOV on 2026-09-22) —
+# instead of relying on the STEP-internal AT_Color → AT_TechSAPColorDesc
+# derivation.  Keys are SAP colour names normalised to A-Z0-9.
+TECH_SAP_COLOR_ID: dict[str, str] = {
+    "BLACK": "BLK", "WHITE": "WHT", "GREY": "GRY", "BLUE": "BLU",
+    "GREEN": "GRN", "RED": "RED", "BEIGE": "BEG", "BROWN": "BRN",
+    "YELLOW": "YLW", "ORANGE": "ORG", "PINK": "PNK", "PURPLE": "PUR",
+    "NOCOLOR": "NOO",
+}
+
+
+def _tech_sap_color_id(sap_color_name: str) -> str:
+    """SAP colour name → AT_TechSAPColorDesc LOV id ('' when unmapped)."""
+    key = re.sub(r"[^A-Z0-9]", "", str(sap_color_name or "").upper())
+    return TECH_SAP_COLOR_ID.get(key, "")
 
 DIVISION = "Footwear"   # fixed by file type → PPH parent letter "F"
 
@@ -594,22 +613,22 @@ def _build_generic_description(
     BM row 25 / v6 R037: MAA Generic Description Mapping —
     max 40 chars: 3-digit brand code + Principal style + (Age/Gender) + Color.
 
-    Issue #3 fix (24-09-2026):
+    Issue #3 fix (24-09-2026) / Issue #8 (28-09-2026):
     - "Principal style" uses the full AT_PrincipalStyleDescription value
       (i.e. "SPL SP27 Product Display Name"), not the raw display_name.
-    - Age label uses GENERIC_DESC_AGE_LABEL mapping (K for Children, AD for Adults)
-      to match "mapping awal" per MAA comment.
-    - Color uses GENERIC_DESC_COLOR_MAP (e.g. NO COLOR → NOO), not SAP Color name.
+    - Age / gender labels follow the STEP derive ("mapping awal"):
+      GENERIC_DESC_AGE_LABEL CH→K, AD→A, AA→O and gender F→W.
+    - Color uses the AT_TechSAPColorDesc LOV id via _tech_sap_color_id
+      (e.g. NO COLOR → NOO) — identical to the attribute the STEP
+      Generic Description derive reads.
     Example output: "NEW SPL SP27 Furon Team Jnr TF V9 (K/U) NOO"
     If the result exceeds 40 chars the Principal style is progressively
     trimmed from the right until it fits (chars trimmed from tail of style_desc).
     """
     age_label_desc = GENERIC_DESC_AGE_LABEL.get(age_code, age_code)
-    age_gender     = f"({age_label_desc}/{gender_code})" if age_code and gender_code else ""
-    color_desc     = GENERIC_DESC_COLOR_MAP.get(
-        (sap_color_name or "").strip().upper(),
-        (sap_color_name or "").strip().upper(),
-    )
+    gender_label   = GENERIC_DESC_GENDER_LABEL.get(gender_code, gender_code)
+    age_gender     = f"({age_label_desc}/{gender_label})" if age_code and gender_code else ""
+    color_desc     = _tech_sap_color_id(sap_color_name) or (sap_color_name or "").strip().upper()
     prefix = _clean(brand_code)[:3]
     suffix = " ".join(p for p in (age_gender, color_desc) if p)
     # Build with full style_desc, then trim if over limit
@@ -807,7 +826,8 @@ EMITTED_ATTRIBUTE_IDS: list[str] = [
     "AT_PrincipalColorName", "AT_PrincipalGenderDescription",
     "AT_SAPStyleCode", "AT_Generic", "AT_GenericDescription",
     "AT_Variant", "AT_VariantDescription",
-    "AT_Color", "AT_Size", "AT_Gender", "AT_SAPAge",
+    "AT_Color", "AT_TechSAPColorDesc",  # Issue #8 — Gen-Desc colour code
+    "AT_Size", "AT_Gender", "AT_SAPAge",
     "AT_CountryOrigin", "AT_Season", "AT_SeasonYear",
     "AT_PrincipalMerchandiseHierarchyL1", "AT_PrincipalMerchandiseHierarchyL2",
     "AT_SAPArticleCategory", "AT_BYArticleType", "AT_NatureOfArticle",
@@ -867,8 +887,9 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
     _val(vals_el, "AT_SAPStyleCode", art["sap_style_code"])
     _val(vals_el, "AT_Generic",      art["generic_code"])
     _val(vals_el, "AT_Variant",      art["variant_code"])
-    # Issue #3 (24-09-2026): Generic description uses full style_desc (SPL+Season+DisplayName),
-    # GENERIC_DESC_AGE_LABEL (K for Children), and GENERIC_DESC_COLOR_MAP (NOO for NO COLOR)
+    # Issue #3 (24-09-2026): Generic description uses full style_desc (SPL+Season+DisplayName).
+    # Issue #8 (28-09-2026): age CH→K / AD→A / AA→O, gender F→W, and the
+    # AT_TechSAPColorDesc LOV id as the colour token — same rule as the STEP derive.
     gen_desc_color = art["sap_color_name"]
     recomputed_generic_desc = _build_generic_description(
         art["brand_code"], style_desc,
@@ -879,6 +900,10 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
 
     # ── SAP color / size (footwear defaults) ───────────────────────
     _val(vals_el, "AT_Color", art["sap_color_name"], id_val=art["sap_color_id"])
+    # Issue #8 (28-09-2026): Generic Description colour code — footwear sample
+    # SAP colour is always 000/NO COLOR → LOV id NOO.
+    _val(vals_el, "AT_TechSAPColorDesc",
+         id_val=_tech_sap_color_id(art["sap_color_name"]))
     _val(vals_el, "AT_Size",  art["sap_size_name"],  id_val=art["sap_size_id"])
 
     # ── Country of origin (footwear default) ───────────────────────

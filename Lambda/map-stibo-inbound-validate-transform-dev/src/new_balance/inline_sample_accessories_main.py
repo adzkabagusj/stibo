@@ -304,6 +304,19 @@ STYLE_BASE_LEN    = 7            # "Up to 7 Digits Principal Style Code"
 
 DIVISION = "Accessories"   # fixed by file type → PPH parent letter "E"
 
+# Issue #9 (29-09-2026): SAP hierarchy SAMPLE node for this division.  Linked
+# on every sample article via CPL_SAPHierarchy so the STEP AT_MerchandiseCategory
+# derive (SAP codes + Brand + Flag) computes the Example Final MC "EZYZYNEWA".
+SAP_HIERARCHY_SAMPLE_NODE = "CLH_EZYZY"
+
+# Issue #5 (fix 29-09-2026): BY hierarchy SAMPLE leaf for this division.
+# BY Sub Category in STEP is driven by the CPL_BYHierarchy classification
+# link, sent exactly this way by the BY inbound (by_inbound.py emits
+# <ClassificationReference ... Type="CPL_BYHierarchy"/> directly under
+# Product).  Sport/NEW/Accessories sample leaf per the UAT reference table →
+# "Accessories Sample".
+BY_HIERARCHY_SAMPLE_NODE = "MA_NEW_E_ZY_ZY_ZY"
+
 DIVISION_PARENT_MAP: dict[str, str] = {
     "ACCESSORIES": "E", "FOOTWEAR": "F", "APPAREL": "A",
     "EQUIPMENT":   "Q", "TOYS":     "T",
@@ -1146,10 +1159,16 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
     # ── Issue #4 (24-09-2026): MC Structure — Sample MC LOV ID
     # Format: DivisionLetter + ZYZY + BrandCode + Flag
     # Accessories (E): CLH_EZYZY → LOV ID EZYZYNEWA
+    # Issue #9 (29-09-2026): the STEP derive computes this same code from the
+    # CPL_SAPHierarchy link in build_product_xml; this direct value is the
+    # matching fallback/documentation.
     _val(vals_el, "AT_MerchandiseCategory", "SAMPLE", id_val="EZYZYNEWA")
 
     # ── Issue #5 (24-09-2026): BY Sub Category — Accessories Sample hierarchy
     # BY Hierarchy: MA_NEW_E_ZY_ZY_ZY → "Accessories Sample"
+    # Issue #5 (fix 29-09-2026): the CPL_BYHierarchy link in build_product_xml
+    # now drives BY Sub Category the same way the BY inbound does; this direct
+    # value is the matching fallback/documentation.
     _val(vals_el, "AT_BYSubCategory", "Accessories Sample", id_val="MA_NEW_E_ZY_ZY_ZY")
 
     country_val = art.get("country_code", "")
@@ -1231,6 +1250,23 @@ def build_product_xml(art, brand, brand_code, comp_code, sbu, season_id, mdd=Non
     cr_unconf = ET.SubElement(g_el, f"{{{STIBO_NS}}}ClassificationReference")
     cr_unconf.set("ClassificationID", f"{season_id}UA")
     cr_unconf.set("Type", "CPL_UnConfirmedForSeason")
+
+    # Issue #9 (29-09-2026): CPL_SAPHierarchy → division SAMPLE node.  The
+    # AT_MerchandiseCategory derive concatenates AT_CombinedSAPCodes of the
+    # classifications linked via CPL_SAPHierarchy + Brand + SAPProductFlag,
+    # so this link makes the derive produce the Example Final MC
+    # (FZYZYNEWA / AZYZYNEWA / EZYZYNEWA per division) for every sample.
+    cr_sap = ET.SubElement(g_el, f"{{{STIBO_NS}}}ClassificationReference")
+    cr_sap.set("ClassificationID", SAP_HIERARCHY_SAMPLE_NODE)
+    cr_sap.set("Type", "CPL_SAPHierarchy")
+
+    # Issue #5 (fix 29-09-2026): CPL_BYHierarchy → division SAMPLE leaf —
+    # the same mechanism the BY inbound uses to populate BY Sub Category;
+    # the AT_BYSubCategory value emitted in _add_generic_values is the
+    # matching fallback/documentation.
+    cr_by = ET.SubElement(g_el, f"{{{STIBO_NS}}}ClassificationReference")
+    cr_by.set("ClassificationID", BY_HIERARCHY_SAMPLE_NODE)
+    cr_by.set("Type", "CPL_BYHierarchy")
 
     vals_el = ET.SubElement(g_el, f"{{{STIBO_NS}}}Values")
     _add_generic_values(vals_el, art, brand, comp_code, sbu, mdd=mdd, bm=bm)

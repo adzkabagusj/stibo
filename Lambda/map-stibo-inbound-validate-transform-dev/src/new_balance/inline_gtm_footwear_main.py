@@ -27,7 +27,11 @@ COLUMN → ATTRIBUTE MAP (v2.0 — every column of the 260722 GTM sheet)
 ────────────────────────────────────────────────────────────────────
   DIRECT (BM sheet rows 13/14/16/18/21/79/80/41/103/123/233 — "Direct
   from Principal" / "Mapping from Principal", Footwear branch):
-    Product Number            → AT_PrincipalStyleCode           [BM row 13]
+    Item Number               → AT_PrincipalStyleCode           [BM row 13]
+                                 (Issue #10, 30-09-2026: mapping logic moved
+                                  from column "Product Number" to "Item
+                                  Number" — BM template & v6 already updated)
+    Product Number            → <Name>/AT_PrincipalStyleDescription fallback
     Short Product Description → AT_PrincipalStyleDescription    [BM row 14]
                                → <Name> (blank → Item Number fallback)
     Colorway Name             → AT_PrincipalColorName           [BM row 16]
@@ -109,7 +113,9 @@ COLUMNS READ BUT *NOT* MAPPED TO STIBO
     AT_LaunchingDate  — BM row 166 wants column "SEA Intro Date"; the GTM
                         sheet only carries "Intro Date - APAC" (which feeds
                         AT_IncomingMonth per BM row 233). Not back-filled.
-    AT_FOB / AT_FOBCurrency — BM row 60: Footwear branch = N/A.
+    AT_FOB             — BM row 60: Footwear branch = N/A (no FOB amount).
+                        AT_FOBCurrency IS emitted (Issue #15, 30-09-2026:
+                        FTW/APP/ACC default USD — currency only, no amount).
     AT_BCI            — BM row 97: Footwear = Manual Input.
     AT_Silhouette     — BM row 101: Footwear = Manual Input.
     AT_TechnologyUsed — BM row 158: FW = Manual MD input.
@@ -129,13 +135,13 @@ COLUMNS READ BUT *NOT* MAPPED TO STIBO
 ────────────────────────────────────────────────────────────────────
 DEVIATIONS (documented, deliberate)
 ────────────────────────────────────────────────────────────────────
- 1. AT_PrincipalStyleCode now comes from Product Number (BM row 13) — v1.0
-    used Item Number because the old GTM export's Product Number was a
-    SAP-style code MAA withdrew. The 260722 sheet's Product Number is the
-    style-level principal code (470 distinct values) the new spec requires.
-    KEY_InboundArticle stays keyed on the row-unique Item Number — the key
-    must remain 1:1 with a source row (2784 rows would collapse to 470
-    articles if keyed on Product Number).
+  1. AT_PrincipalStyleCode comes from Item Number (Issue #10, 30-09-2026 —
+     the updated BM template & v6 sheet moved the mapping from "Product
+     Number" to "Item Number"). v2.0 had briefly used Product Number
+     (style-level principal code); UAT #10 reverted that. KEY_InboundArticle
+     stays keyed on the same row-unique Item Number — the key must remain
+     1:1 with a source row. Product Number survives only as the
+     <Name>/description fallback.
  2. E-com Ages Category is derived from the Item Number 1st letter (BM row
     132). The v6 "NEW BALANCE - LL" sheet (row 144) instead reads the
     "Adult Gender/ Kids Closure Type" column — but that column mixes closure
@@ -211,14 +217,18 @@ SHEET_NAME_FALLBACKS = ["APAC", "Line Sheet", "Line List", "Sheet1"]
 # attributes each one feeds (BM = "NEW BALANCE  LINELIST" sheet row).
 # ══════════════════════════════════════════════════════════════════
 SOURCE_COLUMNS: dict[str, list[str]] = {
-    "Product Number":                    ["AT_PrincipalStyleCode"],
+    # Issue #10 (30-09-2026): AT_PrincipalStyleCode moved from Product
+    # Number to Item Number (BM template & v6 updated). Product Number now
+    # only feeds the <Name>/description fallback.
+    "Product Number":                    ["<Name>/AT_PrincipalStyleDescription fallback"],
     "Short Product Description":         ["AT_PrincipalStyleDescription", "<Name>"],
     "Colorway Name":                     ["AT_PrincipalColorName"],
     "Adult Gender/ Kids Closure Type":   ["AT_PrincipalGenderDescription",
                                           "AT_Fastening (children branch)",
                                           "AT_Gender/AT_SAPAge fallback"],
     "SIZE":                              ["AT_PrincipalSize"],
-    "Item Number":                       ["AT_InboundGenericCode",
+    "Item Number":                       ["AT_PrincipalStyleCode",
+                                          "AT_InboundGenericCode",
                                           "AT_Gender", "AT_SAPAge",
                                           "AT_BYGender", "AT_BYAge",
                                           "AT_EComAgesCategory", "AT_Fastening"],
@@ -303,6 +313,80 @@ LOV_SAP_ARTICLE_CATEGORY = {
 # MDD "BY Article Type" — code → name
 LOV_BY_ARTICLE_TYPE = {
     "Inline": "Inline", "License": "License", "SSE": "SSE",
+}
+
+# ── Issue #11 (30-09-2026): portal country token → AT_Country ────────────────
+# "Manual input in Portal" — the token travels in the upload filename
+# (…-SP2027-ID-1) and reaches this module as args.country_code. Emitted
+# ID-only: co-dependent LOV ("ID - Indonesia"); STIBO discards a LOV value
+# whose ID it does not recognise (aldo/main.py & adidas/tdd_main.py emit
+# AT_Country the same way).
+PORTAL_COUNTRY_LOV: dict[str, str] = {
+    "ID": "Indonesia",   "KH": "Cambodia",  "MY": "Malaysia",
+    "PH": "Philippines", "SG": "Singapore", "TH": "Thailand",
+    "VN": "Vietnam",
+}
+
+# ── Issue #12 (30-09-2026): AT_BrandCategory — "{Country} - {SBU} - TOP" ─────
+# Valid value set exported by the COE (value = value ID, identity LOV).
+# NB sits in SBU SP (Sports) and is classified TOP for every portal country
+# (confirmed with COE 30-09-2026). NB: the live LOV carries "KH - SP TOP"
+# without the second dash — reproduced verbatim so the ID resolves.
+BRAND_CATEGORY_TIER = "TOP"
+LOV_BRAND_CATEGORY_SP: set[str] = {
+    "ID - SP - NON TOP", "ID - SP - TOP",
+    "KH - SP - NON TOP", "KH - SP TOP",        # live LOV anomaly, verbatim
+    "MY - SP - TOP",
+    "PH - SP - NON TOP", "PH - SP - TOP",
+    "SG - SP - TOP",
+    "TH - SP - NON TOP", "TH - SP - TOP",
+    "VN - SP - NON TOP", "VN - SP - TOP",
+}
+
+def _brand_category_value(country_code: str, sbu: str) -> str:
+    """{Country} - {SBU} - {TOP/NON TOP} against the COE value set ('' when
+    the composed value is not a live LOV entry — caller skips emission)."""
+    cc = (country_code or "").strip().upper()
+    su = (sbu or "").strip().upper()
+    if not cc or not su:
+        return ""
+    candidates = (
+        f"{cc} - {su} - {BRAND_CATEGORY_TIER}",   # standard form
+        f"{cc} - {su} {BRAND_CATEGORY_TIER}",     # "KH - SP TOP" anomaly
+    )
+    for cand in candidates:
+        if cand in LOV_BRAND_CATEGORY_SP:
+            return cand
+    return ""
+
+# ── Issue #13 (30-09-2026): AT_PricingDistributionChannel — default Retail ───
+# COE LOV: Retail=01, Wholesale=02, Online=03 (same fix as the sample
+# modules' Issue #3).
+PRICING_DISTRIBUTION_DEFAULT = ("Retail", "01")
+
+# ── Issue #14 (30-09-2026): AT_RetailPriceCurrency — per portal country ──────
+# "Default by currency per country" — COE LOV (display name → ID). KH has no
+# Riel in the LOV, so Cambodia defaults to USD (confirmed 30-09-2026).
+COUNTRY_TO_RETAIL_CURRENCY: dict[str, tuple[str, str]] = {
+    "ID": ("Indonesian Rupiah",    "IDR"),
+    "KH": ("United States Dollar", "USD"),
+    "MY": ("Malaysian Ringgit",    "MYR"),
+    "PH": ("Philippine Peso",      "PHP"),
+    "SG": ("Singapore Dollar",     "SGD"),
+    "TH": ("Thailand Bhat",        "THB"),
+    "VN": ("Vietnamese Dong",      "VND"),
+}
+
+# ── Issue #15 (30-09-2026): AT_FOBCurrency — FTW/APP/ACC default USD ─────────
+FOB_CURRENCY_DEFAULT = ("United States Dollar", "USD")
+
+# ── Issue #17 (30-09-2026): AT_BYGender LOV IDs ──────────────────────────────
+# Display values Male/Female/Unisex (COE mapping Mens→Male, Womens→Female,
+# Unisex→Unisex); IDs are the live STEP LOV IDs observed on real articles
+# (by_stibo_response 23-09-2026 shows ID="MEN"/"WOMEN"). The previous
+# ID=value.upper() form sent "MALE"/"FEMALE", which STIBO silently discarded.
+BY_GENDER_LOV_ID: dict[str, str] = {
+    "Male": "MEN", "Female": "WOMEN", "Unisex": "UNISEX",
 }
 
 # MDD "E-com Ages Category LOV" — value → ID
@@ -992,8 +1076,9 @@ def validate(mapped: dict, mdd: MDDLoader) -> list[str]:
         if "mandatory" in card and (not val or str(val).strip() in ("", "None", "nan")):
             warns.append(f"[{sku}] MISSING mandatory: {at_id}")
 
-    if not mapped.get("product_number"):
-        warns.append(f"[{sku}] MISSING source value: Product Number (AT_PrincipalStyleCode omitted)")
+    # Issue #10 (30-09-2026): AT_PrincipalStyleCode keys on Item Number,
+    # already covered by the mandatory check above (row key). Product
+    # Number is only a <Name>/description fallback — no warning when blank.
     if not mapped.get("line_plan_biz"):
         warns.append(f"[{sku}] MISSING source value: Line Plan Business")
     if not mapped.get("sports_cat") and mapped.get("line_plan_biz"):
@@ -1024,8 +1109,8 @@ def _log_dropped_attributes(mdd: MDDLoader) -> list[str]:
     dropped = {
         "AT_LaunchingDate":  "BM row 166 wants 'SEA Intro Date'; GTM sheet only has "
                              "'Intro Date - APAC' (→ AT_IncomingMonth)",
-        "AT_FOB":            "BM row 60: Footwear = N/A",
-        "AT_FOBCurrency":    "no FOB for footwear — currency not emitted either",
+        "AT_FOB":            "BM row 60: Footwear = N/A (amount only — "
+                             "AT_FOBCurrency defaults to USD per Issue #15)",
         "AT_BCI":            "BM row 97: Footwear = Manual Input",
         "AT_Silhouette":     "BM row 101: Footwear = Manual Input",
         "AT_TechnologyUsed": "BM row 158: FW = Manual MD input",
@@ -1117,6 +1202,10 @@ SHEET_ID_GAPS: set[str] = {"AT_BYArticleType"}
 # attributes). Used for the BrandMapping self-check in run().
 EMITTED_ATTRIBUTE_IDS: list[str] = [
     "AT_Country", "AT_CompanyCode", "AT_SBU", "AT_Brand", "AT_BrandGroup",
+    "AT_BrandCategory",                       # Issue #12 — 30-09-2026
+    "AT_PricingDistributionChannel",          # Issue #13 — 30-09-2026
+    "AT_RetailPriceCurrency",                 # Issue #14 — 30-09-2026
+    "AT_FOBCurrency",                         # Issue #15 — 30-09-2026
     "AT_PrincipalStyleCode", "AT_PrincipalStyleDescription",
     "AT_PrincipalColorName", "AT_PrincipalGenderDescription", "AT_PrincipalSize",
     "AT_Gender", "AT_SAPAge", "AT_BYGender", "AT_BYAge", "AT_EComAgesCategory",
@@ -1151,7 +1240,9 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
     _val(vals_el, "AT_BrandGroup", b_label, id_val=b_label)
 
     # ── Principal style (BM rows 13/14) ───────────────────────────
-    _val(vals_el, "AT_PrincipalStyleCode", art["product_number"])
+    # Issue #10 (30-09-2026): source column moved Product Number → Item
+    # Number (BM template & v6 already updated).
+    _val(vals_el, "AT_PrincipalStyleCode", art["item_number"])
     # v6 R027-style fallback: blank description → Item Number
     _val(vals_el, "AT_PrincipalStyleDescription",
          art["short_desc"] or art["item_number"])
@@ -1171,7 +1262,11 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
     # ── Item Number 1st letter → SAP/BY gender & age (BM rows 37/38/95/96)
     _val(vals_el, "AT_Gender",   art["gender_val"], id_val=art["gender_id"])
     _val(vals_el, "AT_SAPAge",   art["age_val"],    id_val=art["age_id"])
-    _val(vals_el, "AT_BYGender", art["by_gender"],  id_val=art["by_gender"].upper())
+    # Issue #17 (30-09-2026): BY Gender LOV IDs are MEN/WOMEN/UNISEX (live
+    # STEP IDs, by_stibo_response 23-09-2026) — value.upper() sent MALE/
+    # FEMALE, which STIBO silently discarded.
+    by_gender_id = BY_GENDER_LOV_ID.get(art["by_gender"], art["by_gender"].upper())
+    _val(vals_el, "AT_BYGender", art["by_gender"],  id_val=by_gender_id)
     _val(vals_el, "AT_BYAge",    art["by_age"],     id_val=art["by_age_id"])
     _val(vals_el, "AT_EComAgesCategory", art["ecom_age"], id_val=art["ecom_age_id"])
 
@@ -1245,12 +1340,47 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
 
     _val(vals_el, "AT_ArticleStatus", "Active")
 
+    # ── Pricing defaults (UAT 30-09-2026) ─────────────────────────
+    # Issue #13: Pricing Distribution Channel — default Retail (LOV:
+    # Retail=01, Wholesale=02, Online=03; same fix as sample Issue #3).
+    pdc_val, pdc_id = PRICING_DISTRIBUTION_DEFAULT
+    _val(vals_el, "AT_PricingDistributionChannel", pdc_val, id_val=pdc_id)
+
+    # Issue #15: FOB Currency — FTW/APP/ACC default USD (currency only;
+    # the FOB amount stays N/A for footwear per BM row 60).
+    fob_cur_val, fob_cur_id = FOB_CURRENCY_DEFAULT
+    _val(vals_el, "AT_FOBCurrency", fob_cur_val, id_val=fob_cur_id)
+
     # ── Derived pipeline key (repo convention) ────────────────────
     _val(vals_el, "AT_InboundGenericCode", art["generic_code"])
 
-    country_val = art.get("country_code", "")
-    if country_val:
-        _val(vals_el, "AT_Country", country_val, id_val=country_val)
+    # ── Country-dependent attributes (UAT 30-09-2026) ─────────────
+    # Issue #11: Country comes from the portal filename token (e.g.
+    # "…-SP2027-ID-1" → ID). ID-only emission — the LOV is co-dependent
+    # ("ID - Indonesia"); a raw "ID" text value is discarded by STIBO.
+    # Issues #12/#14: Brand Category and Retail Price Currency hang off
+    # the same token; all three are skipped (with a run-level warning in
+    # run()) when the token is missing or not a portal country.
+    country_code = (art.get("country_code") or "").strip().upper()
+    if country_code in PORTAL_COUNTRY_LOV:
+        _val(vals_el, "AT_Country", id_val=country_code)
+
+        # Issue #12: Brand Category — "{Country} - {SBU} - TOP" (NB = SP,
+        # TOP for every portal country; identity LOV — value = ID).
+        brand_cat = _brand_category_value(country_code, sbu)
+        if brand_cat:
+            _val(vals_el, "AT_BrandCategory", brand_cat, id_val=brand_cat)
+        else:
+            log.warning(
+                "Brand Category unresolved for country=%s sbu=%s — "
+                "AT_BrandCategory omitted", country_code, sbu,
+            )
+
+        # Issue #14: Retail Price Currency — default currency per country.
+        retail_cur = COUNTRY_TO_RETAIL_CURRENCY.get(country_code)
+        if retail_cur:
+            _val(vals_el, "AT_RetailPriceCurrency",
+                 retail_cur[0], id_val=retail_cur[1])
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1398,6 +1528,19 @@ def run(args, auditor=None):
     dropped_notes = _log_dropped_attributes(mdd)
 
     all_warnings: list[str] = []
+
+    # Issue #11 (30-09-2026): the country token is run-level filename
+    # metadata — warn once, not per SKU. Country-dependent attributes
+    # (AT_Country / AT_BrandCategory / AT_RetailPriceCurrency) are omitted
+    # when the token is missing or not a portal country.
+    _country_code = (getattr(args, "country_code", "") or "").strip().upper()
+    if _country_code not in PORTAL_COUNTRY_LOV:
+        _msg = (f"Country token '{_country_code or '<missing>'}' from the "
+                "filename is not a portal country (ID/KH/MY/PH/SG/TH/VN) — "
+                "AT_Country, AT_BrandCategory and AT_RetailPriceCurrency "
+                "omitted for every SKU")
+        log.warning("[GTM-FW] %s", _msg)
+        all_warnings.append(_msg)
 
     sea_prefix     = args.season[:2].upper() if len(args.season) >= 2 else args.season
     sea_year_short = args.season[2:] if len(args.season) > 2 else ""

@@ -39,7 +39,9 @@ COLUMN → ATTRIBUTE MAP (v2.0 — every column of the S2'27 Preline sheet)
                                  (e.g. "BLACK (BK)")
     Gender Duty - Non-Footwear→ AT_PrincipalGenderDescription   [BM row 18]
                                → AT_Gender / AT_BYGender         [BM rows 38/96]
-                                 (Mens→Male/M, Womens→Female/F, Unisex→U)
+                                 (Mens→Male/M, Womens→Female/F, Unisex→U;
+                                  BY Gender LOV IDs MEN/WOMEN/UNISEX —
+                                  Issue #17, 30-09-2026)
     Global Size Offering      → AT_PrincipalSize                [BM row 21]
     Line Plan Business        → AT_PrincipalMerchandiseHierarchyL2 [BM row 79]
                                → AT_SportsCategoryEN (LOV ID)    [BM row 121]
@@ -49,7 +51,9 @@ COLUMN → ATTRIBUTE MAP (v2.0 — every column of the S2'27 Preline sheet)
     Product Line              → AT_PrincipalMerchandiseHierarchyL1 [BM row 78]
     Silhouette                → AT_PrincipalMerchandiseHierarchyL3 [BM row 80]
                                → AT_Silhouette (LOV — ID resolved from the
-                                 MDD "Silhouette LOV" at runtime) [BM row 101]
+                                 MDD "Silhouette LOV" at runtime, with the
+                                 COE 60-value LOV as fallback — Issue #18,
+                                 30-09-2026)                       [BM row 101]
     GBU                       → AT_PrincipalMerchandiseHierarchyL4 [BM row 81]
     Detailed Silhouette       → AT_PrincipalMerchandiseHierarchyL5 [BM row 82]
                                → AT_Style (LOV — matched against the MDD
@@ -75,6 +79,11 @@ COLUMN → ATTRIBUTE MAP (v2.0 — every column of the S2'27 Preline sheet)
   CONTEXT (filename/portal metadata — not a source column):
     AT_Country, AT_CompanyCode, AT_SBU, AT_Brand, AT_BrandGroup,
     AT_Season, AT_SeasonYear
+    AT_BrandCategory          = "{Country} - {SBU} - TOP"   [Issue #12]
+    AT_PricingDistributionChannel = Retail / 01 (default)   [Issue #13]
+    AT_RetailPriceCurrency    = per-country default         [Issue #14]
+    (Issues #11-#14, 30-09-2026 — all keyed on the portal country token
+     carried in the upload filename, e.g. "…-SS27-ID-1" → ID)
 
   FILE-TYPE / SPEC DEFAULTS (BM rows 83/84/93/77/90/232):
     AT_MaterialType       = ZINA (Intercompany Articles) [BM row 83]
@@ -160,7 +169,9 @@ DEVIATIONS (documented, deliberate)
     a miss is skipped with a warning — writing raw text to a LOV attribute
     throws "Illegal LOV" on STEP import (lesson recorded in
     reebok/article_master_*). Merchandise-hierarchy text attributes still
-    receive the raw column values.
+    receive the raw column values. Silhouette additionally falls back to
+    the COE 60-value LOV export when the MDD sheet misses (Issue #18,
+    30-09-2026).
  5. AT_BCI carries the Price Segment text (BM row 97). The MDD declares
     LOV "BCI" but ships no BCI LOV sheet, so the ID resolves to "" — the
     text is emitted exactly like lotto/recap_main.py does (display value,
@@ -355,6 +366,132 @@ LOV_BY_ARTICLE_TYPE = {
     "Inline": "Inline", "License": "License", "SSE": "SSE",
     "Licensed": "License", "INLINE": "Inline", "TEAM": "Inline",
 }
+
+# ── Issue #11 (30-09-2026): portal country token → AT_Country ────────────────
+# "Manual input in Portal" — the token travels in the upload filename
+# (…-SS27-ID-1) and reaches this module as args.country_code. Emitted
+# ID-only: co-dependent LOV ("ID - Indonesia"); STIBO discards a LOV value
+# whose ID it does not recognise (aldo/main.py & adidas/tdd_main.py emit
+# AT_Country the same way).
+PORTAL_COUNTRY_LOV: dict[str, str] = {
+    "ID": "Indonesia",   "KH": "Cambodia",  "MY": "Malaysia",
+    "PH": "Philippines", "SG": "Singapore", "TH": "Thailand",
+    "VN": "Vietnam",
+}
+
+# ── Issue #12 (30-09-2026): AT_BrandCategory — "{Country} - {SBU} - TOP" ─────
+# Valid value set exported by the COE (value = value ID, identity LOV).
+# NB sits in SBU SP (Sports) and is classified TOP for every portal country
+# (confirmed with COE 30-09-2026). NB: the live LOV carries "KH - SP TOP"
+# without the second dash — reproduced verbatim so the ID resolves.
+BRAND_CATEGORY_TIER = "TOP"
+LOV_BRAND_CATEGORY_SP: set[str] = {
+    "ID - SP - NON TOP", "ID - SP - TOP",
+    "KH - SP - NON TOP", "KH - SP TOP",        # live LOV anomaly, verbatim
+    "MY - SP - TOP",
+    "PH - SP - NON TOP", "PH - SP - TOP",
+    "SG - SP - TOP",
+    "TH - SP - NON TOP", "TH - SP - TOP",
+    "VN - SP - NON TOP", "VN - SP - TOP",
+}
+
+def _brand_category_value(country_code: str, sbu: str) -> str:
+    """{Country} - {SBU} - {TOP/NON TOP} against the COE value set ('' when
+    the composed value is not a live LOV entry — caller skips emission)."""
+    cc = (country_code or "").strip().upper()
+    su = (sbu or "").strip().upper()
+    if not cc or not su:
+        return ""
+    candidates = (
+        f"{cc} - {su} - {BRAND_CATEGORY_TIER}",   # standard form
+        f"{cc} - {su} {BRAND_CATEGORY_TIER}",     # "KH - SP TOP" anomaly
+    )
+    for cand in candidates:
+        if cand in LOV_BRAND_CATEGORY_SP:
+            return cand
+    return ""
+
+# ── Issue #13 (30-09-2026): AT_PricingDistributionChannel — default Retail ───
+# COE LOV: Retail=01, Wholesale=02, Online=03 (same fix as the sample
+# modules' Issue #3).
+PRICING_DISTRIBUTION_DEFAULT = ("Retail", "01")
+
+# ── Issue #14 (30-09-2026): AT_RetailPriceCurrency — per portal country ──────
+# "Default by currency per country" — COE LOV (display name → ID). KH has no
+# Riel in the LOV, so Cambodia defaults to USD (confirmed 30-09-2026).
+COUNTRY_TO_RETAIL_CURRENCY: dict[str, tuple[str, str]] = {
+    "ID": ("Indonesian Rupiah",    "IDR"),
+    "KH": ("United States Dollar", "USD"),
+    "MY": ("Malaysian Ringgit",    "MYR"),
+    "PH": ("Philippine Peso",      "PHP"),
+    "SG": ("Singapore Dollar",     "SGD"),
+    "TH": ("Thailand Bhat",        "THB"),
+    "VN": ("Vietnamese Dong",      "VND"),
+}
+
+# ── Issue #17 (30-09-2026): AT_BYGender LOV IDs ──────────────────────────────
+# Display values Male/Female/Unisex (COE mapping Mens→Male, Womens→Female,
+# Unisex→Unisex); IDs are the live STEP LOV IDs observed on real articles
+# (by_stibo_response 23-09-2026 shows ID="MEN"/"WOMEN"). The previous
+# ID=value.upper() form sent "MALE"/"FEMALE", which STIBO silently discarded.
+BY_GENDER_LOV_ID: dict[str, str] = {
+    "Male": "MEN", "Female": "WOMEN", "Unisex": "UNISEX",
+}
+
+# ── Issue #18 (30-09-2026): AT_Silhouette LOV — COE export 30-09-2026 ────────
+# 60 values, IDs zero-padded "01".."60" (same convention as
+# LOV_SPORTS_CATEGORY_ID). Used as the fallback when the runtime MDD
+# "Silhouette LOV" lookup misses — the UAT run showed the MDD sheet alone
+# resolves nothing, leaving AT_Silhouette blank.
+LOV_SILHOUETTE_ID: dict[str, str] = {
+    "Aqua Shorts":            "01", "Athleisure":            "02",
+    "Backstrap":              "03", "Ballerina":             "04",
+    "Boot":                   "05", "Bra Top":               "06",
+    "Capris":                 "07", "Chelsea":               "08",
+    "Clog":                   "09", "Combo Set":             "10",
+    "Dress":                  "11", "Fisherman":             "12",
+    "Flip Flop":              "13", "Full Zipped Hoodies":   "14",
+    "High Cut Shoes":         "15", "Jackets":               "16",
+    "Jammer":                 "17", "Jogger":                "18",
+    "Loafer":                 "19", "Low Cut Shoes":         "20",
+    "Mary Jane":              "21", "Mid - Cut":             "22",
+    "Mid Cut Shoes":          "23", "Moccasins":             "24",
+    "Monk":                   "25", "Mules":                 "26",
+    "One Piece":              "27", "Open Toe Pumps":        "28",
+    "Pants":                  "29", "Polo":                  "30",
+    "Pull Over Hoodies":      "31", "Pumps":                 "32",
+    "Rashguard (Long)":       "33", "Rashguard (Short)":     "34",
+    "Sandal":                 "35", "Set Apparel":           "36",
+    "Shoes":                  "37", "Shorts":                "38",
+    "Skirt":                  "39", "Skort":                 "40",
+    "Sleeveless / Vest":      "41", "Slides":                "42",
+    "Slip On":                "43", "Sneaker High Top":      "44",
+    "Sneaker Low Top":        "45", "Spike":                 "46",
+    "Spikeless":              "47", "Strap Sandal":          "48",
+    "Sweatshirts":            "49", "T-Shirt (Long Sleeves)":  "50",
+    "T-Shirt (Short Sleeves)": "51", "Tankini":              "52",
+    "Thong":                  "53", "Tights (3/4Th)":        "54",
+    "Tights (Full Length)":   "55", "Tights (Short)":        "56",
+    "Toe Ring":               "57", "Underwear":             "58",
+    "Unknown":                "59", "Watershorts":           "60",
+}
+
+# Case/punctuation-insensitive index over LOV_SILHOUETTE_ID so source values
+# like "T-SHIRT (SHORT SLEEVES)" or "sneaker low top" still resolve.
+_SILHOUETTE_NORM_INDEX: dict[str, tuple[str, str]] = {
+    re.sub(r"[^A-Z0-9]", "", k.upper()): (k, v) for k, v in LOV_SILHOUETTE_ID.items()
+}
+
+def _silhouette_lov_id(value: str) -> tuple[str, str]:
+    """Resolve a Silhouette source value against the COE LOV.
+    Returns (canonical_value, lov_id) or ("", "") when unmatched."""
+    raw = (value or "").strip()
+    if not raw:
+        return "", ""
+    if raw in LOV_SILHOUETTE_ID:
+        return raw, LOV_SILHOUETTE_ID[raw]
+    hit = _SILHOUETTE_NORM_INDEX.get(re.sub(r"[^A-Z0-9]", "", raw.upper()))
+    return hit if hit else ("", "")
 
 # ── Line Plan Business → Sports Category (BM row 121, verbatim) ─────────────
 LOV_LINE_PLAN_TO_SPORTS_CAT: dict[str, str] = {
@@ -1087,6 +1224,14 @@ def validate(mapped: dict, mdd: MDDLoader) -> list[str]:
     if not mapped.get("coo_id") and mapped.get("coo_raw"):
         warns.append(f"[{sku}] Country of origin unresolved from '{mapped['coo_raw']}' — "
                      "AT_CountryOrigin omitted")
+    # Issue #18 (30-09-2026): Silhouette must resolve against the MDD LOV or
+    # the COE 60-value fallback, else AT_Silhouette is omitted.
+    if mapped.get("silhouette"):
+        sil_mdd_id  = mdd.lov_id("Silhouette", mapped["silhouette"]) if mdd else ""
+        sil_coe_id  = _silhouette_lov_id(mapped["silhouette"])[1]
+        if not sil_mdd_id and not sil_coe_id:
+            warns.append(f"[{sku}] UNMAPPED Silhouette '{mapped['silhouette']}' — "
+                         "AT_Silhouette omitted")
     if mapped.get("target_material") and not mapped.get("material_id"):
         warns.append(f"[{sku}] Material LOV close value unresolved from "
                      "'{mapped['target_material']}' — AT_Material omitted")
@@ -1204,6 +1349,9 @@ SHEET_ID_GAPS: set[str] = {"AT_BYArticleType"}
 # attributes). Used for the BrandMapping self-check in run().
 EMITTED_ATTRIBUTE_IDS: list[str] = [
     "AT_Country", "AT_CompanyCode", "AT_SBU", "AT_Brand", "AT_BrandGroup",
+    "AT_BrandCategory",                       # Issue #12 — 30-09-2026
+    "AT_PricingDistributionChannel",          # Issue #13 — 30-09-2026
+    "AT_RetailPriceCurrency",                 # Issue #14 — 30-09-2026
     "AT_PrincipalStyleCode", "AT_PrincipalStyleDescription",
     "AT_PrincipalColorCode", "AT_PrincipalColorName",
     "AT_PrincipalGenderDescription", "AT_PrincipalSize",
@@ -1254,7 +1402,11 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
         gender_max = mdd.max_chars("AT_PrincipalGenderDescription", MAX_GENDER_DESC_CHARS)
     _val(vals_el, "AT_PrincipalGenderDescription", art["gender_duty"][:gender_max])
     _val(vals_el, "AT_Gender",   art["gender_val"], id_val=art["gender_id"])
-    _val(vals_el, "AT_BYGender", art["gender_val"], id_val=art["gender_val"].upper())
+    # Issue #17 (30-09-2026): BY Gender LOV IDs are MEN/WOMEN/UNISEX (live
+    # STEP IDs, by_stibo_response 23-09-2026) — value.upper() sent MALE/
+    # FEMALE, which STIBO silently discarded.
+    by_gender_id = BY_GENDER_LOV_ID.get(art["gender_val"], art["gender_val"].upper())
+    _val(vals_el, "AT_BYGender", art["gender_val"], id_val=by_gender_id)
 
     # ── Line Plan Business → SAP Age / BY Age (BM rows 37/95) ─────
     _val(vals_el, "AT_SAPAge", art["age_val"], id_val=art["age_id"])
@@ -1289,11 +1441,29 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
         _val(vals_el, "AT_SportsCategoryEN", art["sports_cat"],
              id_val=art["sports_cat_id"])
 
-    # ── Silhouette → AT_Silhouette (LOV ID from the MDD at runtime) ─
+    # ── Silhouette → AT_Silhouette (LOV ID; BM row 101) ────────────
+    # Issue #18 (30-09-2026): the runtime MDD "Silhouette LOV" lookup
+    # resolved nothing in UAT, leaving AT_Silhouette blank. Two causes
+    # fixed here: (a) the MDD sheet stores INTEGER codes, so str(1) = "1"
+    # while the live LOV ID is zero-padded "01" — STIBO discards the
+    # unpadded ID; (b) the COE 60-value export (value → zero-padded ID)
+    # now serves as fallback, with the MDD remaining the primary source
+    # (it is a superset: IDs 61-69 cover S/S Top, Short, Socks, …).
     if art.get("silhouette"):
         sil_id = mdd.lov_id("Silhouette", art["silhouette"]) if mdd else ""
+        if sil_id.isdigit():
+            sil_id = sil_id.zfill(2)
         if sil_id:
             _val(vals_el, "AT_Silhouette", art["silhouette"], id_val=sil_id)
+        else:
+            sil_val, sil_fallback_id = _silhouette_lov_id(art["silhouette"])
+            if sil_fallback_id:
+                _val(vals_el, "AT_Silhouette", sil_val, id_val=sil_fallback_id)
+            else:
+                log.warning(
+                    "Silhouette '%s' not in MDD or COE LOV — AT_Silhouette "
+                    "omitted", art["silhouette"],
+                )
 
     # ── Detailed Silhouette → AT_Style (LOV value match, runtime) ──
     if art.get("detailed_silhouette") and mdd is not None:
@@ -1348,12 +1518,42 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
     _val(vals_el, "AT_UOM", "Each", id_val="EA")
     _val(vals_el, "AT_ArticleStatus", "Active")
 
+    # ── Pricing defaults (UAT 30-09-2026) ─────────────────────────
+    # Issue #13: Pricing Distribution Channel — default Retail (LOV:
+    # Retail=01, Wholesale=02, Online=03; same fix as sample Issue #3).
+    pdc_val, pdc_id = PRICING_DISTRIBUTION_DEFAULT
+    _val(vals_el, "AT_PricingDistributionChannel", pdc_val, id_val=pdc_id)
+
     # ── Derived pipeline key (repo convention) ────────────────────
     _val(vals_el, "AT_InboundGenericCode", art["generic_code"])
 
-    country_val = art.get("country_code", "")
-    if country_val:
-        _val(vals_el, "AT_Country", country_val, id_val=country_val)
+    # ── Country-dependent attributes (UAT 30-09-2026) ─────────────
+    # Issue #11: Country comes from the portal filename token (e.g.
+    # "…-SS27-ID-1" → ID). ID-only emission — the LOV is co-dependent
+    # ("ID - Indonesia"); a raw "ID" text value is discarded by STIBO.
+    # Issues #12/#14: Brand Category and Retail Price Currency hang off
+    # the same token; all three are skipped (with a run-level warning in
+    # run()) when the token is missing or not a portal country.
+    country_code = (art.get("country_code") or "").strip().upper()
+    if country_code in PORTAL_COUNTRY_LOV:
+        _val(vals_el, "AT_Country", id_val=country_code)
+
+        # Issue #12: Brand Category — "{Country} - {SBU} - TOP" (NB = SP,
+        # TOP for every portal country; identity LOV — value = ID).
+        brand_cat = _brand_category_value(country_code, sbu)
+        if brand_cat:
+            _val(vals_el, "AT_BrandCategory", brand_cat, id_val=brand_cat)
+        else:
+            log.warning(
+                "Brand Category unresolved for country=%s sbu=%s — "
+                "AT_BrandCategory omitted", country_code, sbu,
+            )
+
+        # Issue #14: Retail Price Currency — default currency per country.
+        retail_cur = COUNTRY_TO_RETAIL_CURRENCY.get(country_code)
+        if retail_cur:
+            _val(vals_el, "AT_RetailPriceCurrency",
+                 retail_cur[0], id_val=retail_cur[1])
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1499,6 +1699,19 @@ def run(args, auditor=None):
     dropped_notes = _log_dropped_attributes(mdd)
 
     all_warnings: list[str] = []
+
+    # Issue #11 (30-09-2026): the country token is run-level filename
+    # metadata — warn once, not per SKU. Country-dependent attributes
+    # (AT_Country / AT_BrandCategory / AT_RetailPriceCurrency) are omitted
+    # when the token is missing or not a portal country.
+    _country_code = (getattr(args, "country_code", "") or "").strip().upper()
+    if _country_code not in PORTAL_COUNTRY_LOV:
+        _msg = (f"Country token '{_country_code or '<missing>'}' from the "
+                "filename is not a portal country (ID/KH/MY/PH/SG/TH/VN) — "
+                "AT_Country, AT_BrandCategory and AT_RetailPriceCurrency "
+                "omitted for every SKU")
+        log.warning("[APPACC-PRELINE] %s", _msg)
+        all_warnings.append(_msg)
 
     sea_prefix     = args.season[:2].upper() if len(args.season) >= 2 else args.season
     sea_year_short = args.season[2:] if len(args.season) > 2 else ""

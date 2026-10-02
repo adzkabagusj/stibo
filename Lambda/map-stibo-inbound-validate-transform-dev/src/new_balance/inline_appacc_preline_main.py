@@ -40,8 +40,8 @@ COLUMN → ATTRIBUTE MAP (v2.0 — every column of the S2'27 Preline sheet)
     Gender Duty - Non-Footwear→ AT_PrincipalGenderDescription   [BM row 18]
                                → AT_Gender / AT_BYGender         [BM rows 38/96]
                                  (Mens→Male/M, Womens→Female/F, Unisex→U;
-                                  BY Gender LOV IDs MEN/WOMEN/UNISEX —
-                                  Issue #17, 30-09-2026)
+                                  BY Gender LOV IDs M/F/U — Issue #17,
+                                  LOV corrected 02-10-2026)
     Global Size Offering      → AT_PrincipalSize                [BM row 21]
     Line Plan Business        → AT_PrincipalMerchandiseHierarchyL2 [BM row 79]
                                → AT_SportsCategoryEN (LOV ID)    [BM row 121]
@@ -56,12 +56,17 @@ COLUMN → ATTRIBUTE MAP (v2.0 — every column of the S2'27 Preline sheet)
                                  30-09-2026)                       [BM row 101]
     GBU                       → AT_PrincipalMerchandiseHierarchyL4 [BM row 81]
     Detailed Silhouette       → AT_PrincipalMerchandiseHierarchyL5 [BM row 82]
-                               → AT_Style (LOV — matched against the MDD
-                                 "Style LOV" values at runtime)    [BM row 110]
+                               → AT_Style (single-column LOV — normalized
+                                 match against the MDD "Style LOV" values
+                                 at runtime)                     [BM row 110]
     Price Segment             → AT_BCI                          [BM row 97]
     Product Fit               → AT_Fit (LOV close value)        [BM row 109]
     Target Principal Material → AT_Content / AT_Fabric / AT_Material (LOV
                                  close values)                   [BM rows 106/107/111]
+                                 (AT_Material: non-Apparel divisions only —
+                                  Issue #20, 02-10-2026: COE keeps Material
+                                  empty for Apparel; composition flows via
+                                  AT_Content/AT_Fabric)
     Country Of Origin         → AT_CountryOrigin                [BM row 41]
                                  ("VNM - Viet Nam" → VNM → VN/Vietnam)
     Technologies              → AT_TechnologyUsed               [BM row 158]
@@ -143,10 +148,14 @@ COLUMNS READ BUT *NOT* MAPPED TO STIBO
     AT_CountrySize      — BM row 130: APP/ACC = Manual input from MD.
     AT_MaterialUpper    — BM row 103: APP ACC = N/A.
     AT_Fastening        — BM row 104: APP/ACC = N/A.
-    AT_SAPStyleCode / AT_Generic / AT_GenericDescription / AT_Variant /
+    AT_SAPStyleCode / AT_Generic / AT_Variant /
     AT_VariantDescription — BM rows 22-26 "Formula in System" ("Type C"),
                       computed downstream from the BY SAP colour/size
-                      response; never guessed here.
+                      response; never guessed here. AT_GenericDescription
+                      IS emitted (Issue #21, 02-10-2026): MAA Generic
+                      Description Mapping, max 40 chars — brand(3) +
+                      Principal style + (Age/Gender) + Color — an exact
+                      replica of the sample modules' implementation.
 
 ────────────────────────────────────────────────────────────────────
 DEVIATIONS (documented, deliberate)
@@ -237,9 +246,11 @@ SHEET_NAME_FALLBACKS = ["APPACC", "APP ACC", "Preline", "Linelist", "Sheet1"]
 # ══════════════════════════════════════════════════════════════════
 SOURCE_COLUMNS: dict[str, list[str]] = {
     "Product Number":              ["AT_PrincipalStyleCode"],
-    "Product Display Name":        ["AT_PrincipalStyleDescription", "<Name>"],
+    "Product Display Name":        ["AT_PrincipalStyleDescription", "<Name>",
+                                     "AT_GenericDescription (style part)"],
     "Item Number":                 ["AT_PrincipalColorCode", "AT_InboundGenericCode"],
-    "Color Code - Non-Footwear":   ["AT_PrincipalColorName"],
+    "Color Code - Non-Footwear":   ["AT_PrincipalColorName",
+                                     "AT_GenericDescription (color part)"],
     "Gender Duty - Non-Footwear":  ["AT_PrincipalGenderDescription",
                                     "AT_Gender", "AT_BYGender"],
     "Global Size Offering":        ["AT_PrincipalSize"],
@@ -255,7 +266,8 @@ SOURCE_COLUMNS: dict[str, list[str]] = {
                                     "AT_Style", "AT_Collection1 (component)"],
     "Price Segment":               ["AT_BCI"],
     "Product Fit":                 ["AT_Fit"],
-    "Target Principal Material":   ["AT_Content", "AT_Fabric", "AT_Material"],
+    "Target Principal Material":   ["AT_Content", "AT_Fabric",
+                                    "AT_Material (non-Apparel only — Issue #20)"],
     "Country Of Origin":           ["AT_CountryOrigin"],
     "Technologies":                ["AT_TechnologyUsed"],
     "Product Collection":          ["AT_Collection2"],
@@ -429,13 +441,13 @@ COUNTRY_TO_RETAIL_CURRENCY: dict[str, tuple[str, str]] = {
     "VN": ("Vietnamese Dong",      "VND"),
 }
 
-# ── Issue #17 (30-09-2026): AT_BYGender LOV IDs ──────────────────────────────
+# ── Issue #17 (30-09-2026, LOV corrected 02-10-2026): AT_BYGender IDs ─────────
 # Display values Male/Female/Unisex (COE mapping Mens→Male, Womens→Female,
-# Unisex→Unisex); IDs are the live STEP LOV IDs observed on real articles
-# (by_stibo_response 23-09-2026 shows ID="MEN"/"WOMEN"). The previous
-# ID=value.upper() form sent "MALE"/"FEMALE", which STIBO silently discarded.
+# Unisex→Unisex); LOV IDs are M/F/U (COE LOV — same table the BY inbound's
+# _GENDER_LOV_MAP uses). The previous ID=value.upper() form sent MALE/
+# FEMALE, which STIBO silently discarded.
 BY_GENDER_LOV_ID: dict[str, str] = {
-    "Male": "MEN", "Female": "WOMEN", "Unisex": "UNISEX",
+    "Male": "M", "Female": "F", "Unisex": "U",
 }
 
 # ── Issue #18 (30-09-2026): AT_Silhouette LOV — COE export 30-09-2026 ────────
@@ -492,6 +504,53 @@ def _silhouette_lov_id(value: str) -> tuple[str, str]:
         return raw, LOV_SILHOUETTE_ID[raw]
     hit = _SILHOUETTE_NORM_INDEX.get(re.sub(r"[^A-Z0-9]", "", raw.upper()))
     return hit if hit else ("", "")
+
+# ── Issue #19 (02-10-2026): AT_Style LOV — COE export 02-10-2026 ─────────────
+# Single-column LOV: no ID column, so the VALUE IS THE ID (same convention
+# as the Franchise LOV — by_inbound.py). Emitted as <Value ID="x">x</Value>.
+# Accessories-only: apparel Detailed Silhouettes (e.g. "Shorts") have no
+# entry and are warned + omitted until the STEP LOV is extended. The MDD
+# "Style LOV" sheet mirrors this list (with trailing-space quirks like
+# "Bucket " / "Tote ") and stays the primary source; this export is the
+# fallback when the runtime MDD sheet misses.
+LOV_STYLE_VALUES: tuple[str, ...] = (
+    "Arm Sleeves", "Backpack", "Badminton Racquette", "Baguette",
+    "Baseball Cap", "Basket Balls", "Beanie", "Belt",
+    "Bracelets", "Bucket", "Bucket Hat", "Calf Sleeves",
+    "Charms & Lace Clips", "Clutch", "Coin Purse", "Duffel Bags",
+    "Ear Rings", "Equipment Others", "Fitness Bands", "Fitness Recovery",
+    "Gloves", "Goggles", "Grips", "Gym Sack",
+    "Hair Accessories", "Head Band", "Hijab", "Hobo",
+    "Hosiery", "Hygiene", "Insoles", "Jibbitz",
+    "Knee Length Socks", "Laces", "Laptop Bag", "Lifestyle High Cut Socks",
+    "Lifestyle Low Cut Socks", "Lifestyle Mid Cut Socks",
+    "Lifestyle No Show Socks", "Lunch Bag", "Mini Backpack", "Mini Balls",
+    "Necklaces", "Patches", "Performance Cap",
+    "Performance High Cut Socks", "Performance Low Cut Socks",
+    "Performance Mid Cut Socks", "Performance No Show Socks", "Pouch",
+    "Racquette Bag", "Rings", "Saddle", "Satchel",
+    "Scarf / Shawl", "Shoe Bag", "Shoe Care", "Shuttle Cock",
+    "Sling Bag", "Snapback Cap", "Soccer Balls", "Soccer Socks",
+    "Straw Hat", "Strings", "Sunglasses", "Swim Cap",
+    "Swimming Equipment", "Tennis Balls", "Tennis Racquette", "Tote",
+    "Towel", "Training Others", "Trucker Cap", "Visors",
+    "Waist Bag", "Wallet", "Watch", "Water Bottles",
+    "Weights", "Wrist Band", "Yoga Block", "Yoga Mat",
+)
+
+_STYLE_NORM_INDEX: dict[str, str] = {
+    re.sub(r"[^A-Z0-9]", "", v.upper()): v for v in LOV_STYLE_VALUES
+}
+
+def _style_lov_value(value: str) -> str:
+    """Resolve a Detailed Silhouette source value against the COE Style LOV.
+    Returns the canonical value ('' when unmatched) — value IS the ID."""
+    raw = (value or "").strip()
+    if not raw:
+        return ""
+    if raw in LOV_STYLE_VALUES:
+        return raw
+    return _STYLE_NORM_INDEX.get(re.sub(r"[^A-Z0-9]", "", raw.upper()), "")
 
 # ── Line Plan Business → Sports Category (BM row 121, verbatim) ─────────────
 LOV_LINE_PLAN_TO_SPORTS_CAT: dict[str, str] = {
@@ -576,7 +635,8 @@ FIT_CLOSE_MAP: dict[str, tuple] = {
 
 # ── Target Principal Material → Material / Content / Fabric LOV close values ─
 # Three attributes share one source column (BM rows 106/107/111); each is
-# emitted only when its own LOV resolves (see DEVIATION 4).
+# emitted only when its own LOV resolves (see DEVIATION 4). AT_Material is
+# further restricted to non-Apparel divisions (Issue #20, 02-10-2026).
 MATERIAL_LOV_CLOSE: dict[str, tuple] = {          # MDD "Material LOV"
     "COTTON":        ("COT", "Cotton"),
     "COTTON JERSEY": ("COT", "Cotton"),
@@ -592,6 +652,46 @@ MATERIAL_LOV_CLOSE: dict[str, tuple] = {          # MDD "Material LOV"
     "SYNTHETIC":     ("SYN", "Synthetic"),
     "ACRYLIC":       ("ACR", "Acrylic"),
     "POLYURETHANE":  ("PU",  "PU"),
+    # Issue #20 (02-10-2026) — remaining COE Material LOV entries (ACC
+    # rows), value → (ID, display) exactly as the COE export spells them
+    # (incl. "Polyproplene").
+    "BLEND":         ("BLD", "Blend"),
+    "CANVAS":        ("CAN", "Canvas"),
+    "CARBON FIBER":  ("CF",  "Carbon Fiber"),
+    "COPPER":        ("COP", "Copper"),
+    "EVA":           ("EVA", "Eva"),
+    "FABRICS":       ("FAB", "Fabrics"),
+    "FIBER GLASS":   ("FG",  "Fiber Glass"),
+    "FUR":           ("FUR", "Fur"),
+    "GOLD FINISH":   ("GDF", "Gold Finish"),
+    "GRAPHITE":      ("GRA", "Graphite"),
+    "LEATHER":       ("LEA", "Leather"),
+    "LIQUID":        ("LIQ", "Liquid"),
+    "METAL":         ("MET", "Metal"),
+    "NUBUCK":        ("NUB", "Nubuck"),
+    "PAPER":         ("PAP", "Paper"),
+    "PASTE":         ("PAS", "Paste"),
+    "PATENT":        ("PAT", "Patent"),
+    "PLASTIC":       ("PLA", "Plastic"),
+    "PLATINUM":      ("PLT", "Platinum"),
+    "POLISH":        ("POL", "Polish"),
+    "POLYPROPYLENE": ("PP",  "Polyproplene"),
+    "POLYPROPLENE":  ("PP",  "Polyproplene"),
+    "PU":            ("PU",  "PU"),
+    "PVC":           ("PVC", "PVC"),
+    "RAYON":         ("RAY", "Rayon"),
+    "RUBBER":        ("RUB", "Rubber"),
+    "SILICONE":      ("SIL", "Silicone"),
+    "SILVER":        ("SLV", "Silver"),
+    "STAINLESS STEEL": ("SS", "Stainless steel"),
+    "STRAW":         ("STR", "Straw"),
+    "SUEDE":         ("SUE", "Suede"),
+    "SURLYN":        ("SUR", "Surlyn"),
+    "SUSTAINABLE":   ("SUS", "Sustainable"),
+    "TEXTILE":       ("TEX", "Textile"),
+    "URETHANE":      ("URE", "Urethane"),
+    "WAX":           ("WAX", "Wax"),
+    "WOOD":          ("WOD", "Wood"),
 }
 CONTENT_LOV_CLOSE: dict[str, tuple] = {           # MDD "Content LOV"
     "COTTON":        ("COTTON", "Cotton"),
@@ -767,6 +867,24 @@ class MDDLoader:
             return False
         v = value.strip()
         return v in table or v.title() in table or v.upper() in table
+
+    def normalized_lookup(self, lov_display: str, value: str) -> str:
+        """Case/whitespace/punctuation-insensitive LOV value match.
+        Returns the CANONICAL LOV value ('' when unmatched).
+        Needed because the MDD sheets themselves carry keys with trailing
+        spaces (Style LOV: "Bucket ", "Tote ") that defeat the plain
+        membership test (Issue #19, 02-10-2026)."""
+        table = self.lovs.get(lov_display, {})
+        v = (value or "").strip()
+        if not v:
+            return ""
+        if v in table:
+            return v
+        key = re.sub(r"[^A-Z0-9]", "", v.upper())
+        for cand in table:
+            if re.sub(r"[^A-Z0-9]", "", str(cand).upper()) == key:
+                return str(cand)
+        return ""
 
 
 class BrandMappingLinelistLoader:
@@ -1082,6 +1200,87 @@ def _build_generic_code(brand_code: str, item_number: str) -> str:
     return f"{brand}{base}"
 
 
+# ── Generic Description (Issue #21, 02-10-2026) ──────────────────────────────
+# Exact replica of the sample modules' implementation
+# (inline_sample_apparel_main.py): MAA Generic Description Mapping, max 40
+# chars — 3-digit brand code + Principal style + (Age/Gender) + Color.
+MAX_GENERIC_DESC_LEN = 40
+
+# Age / gender labels follow the STEP Generic Description derive
+# ("mapping awal"): IF SAPAge = 'CH' → 'K', 'AD' → 'A', 'AA' → 'O';
+# IF Gender = 'F' → 'W' (Womens). M / U pass through unchanged.
+GENERIC_DESC_AGE_LABEL: dict[str, str] = {
+    "AD": "A",   # Adults
+    "CH": "K",   # Children → K (Kids)
+    "AA": "O",   # All Ages
+}
+
+GENERIC_DESC_GENDER_LABEL: dict[str, str] = {
+    "F": "W",    # Female → W (Womens); M / U pass through
+}
+
+# AT_TechSAPColorDesc LOV — the LOV the STEP Generic Description derive
+# reads (exported from the STEP Workbench on 2026-09-22; keys are SAP
+# colour names, A-Z0-9 normalised; RED stays RED because the Workbench LOV
+# spells it that way).
+TECH_SAP_COLOR_ID: dict[str, str] = {
+    "BLACK": "BLK", "WHITE": "WHT", "GREY": "GRY", "BLUE": "BLU",
+    "GREEN": "GRN", "RED": "RED", "BEIGE": "BEG", "BROWN": "BRN",
+    "YELLOW": "YLW", "ORANGE": "ORG", "PINK": "PNK", "PURPLE": "PUR",
+    "NOCOLOR": "NOO",
+}
+
+
+def _tech_sap_color_id(sap_color_name: str) -> str:
+    """SAP colour name → AT_TechSAPColorDesc LOV id ('' when unmapped)."""
+    key = re.sub(r"[^A-Z0-9]", "", str(sap_color_name or "").upper())
+    return TECH_SAP_COLOR_ID.get(key, "")
+
+
+def _color_family_name(color_name: str) -> str:
+    """Strip the trailing vendor code from the preline colour column —
+    "BLACK (BK)" → "BLACK" — so the family name resolves in
+    TECH_SAP_COLOR_ID ("BLACK(BK)" normalised would miss)."""
+    return re.sub(r"\s*\([^)]*\)\s*$", "", (color_name or "").strip()).strip()
+
+
+def _build_generic_description(
+    brand_code: str, style_desc: str,
+    age_code: str, gender_code: str, sap_color_name: str,
+) -> str:
+    """
+    MAA Generic Description Mapping — max 40 chars:
+    3-digit brand code + Principal style + (Age/Gender) + Color.
+
+    Replica of inline_sample_apparel_main._build_generic_description:
+    - Age / gender labels follow the STEP derive ("mapping awal"):
+      GENERIC_DESC_AGE_LABEL CH→K, AD→A, AA→O and gender F→W.
+    - Color uses the AT_TechSAPColorDesc LOV id via _tech_sap_color_id
+      (e.g. NO COLOR → NOO, RED → RED); unmapped names fall back to the
+      raw text uppercased.
+    If the result exceeds 40 chars the Principal style is trimmed on a
+    whole-word boundary ("Active Premium", never "Active Premium St").
+    """
+    age_label_desc = GENERIC_DESC_AGE_LABEL.get(age_code, age_code)
+    gender_label   = GENERIC_DESC_GENDER_LABEL.get(gender_code, gender_code)
+    age_gender     = f"({age_label_desc}/{gender_label})" if age_code and gender_code else ""
+    color_desc     = _tech_sap_color_id(sap_color_name) or (sap_color_name or "").strip().upper()
+    prefix = _s(brand_code)[:3]
+    suffix = " ".join(p for p in (age_gender, color_desc) if p)
+    style  = (style_desc or "").strip()
+    result = " ".join(p for p in (prefix, style, suffix) if p)
+    if len(result) <= MAX_GENERIC_DESC_LEN:
+        return result
+    fixed_len  = len(prefix) + (1 if prefix else 0) + len(suffix) + (1 if suffix else 0)
+    avail      = MAX_GENERIC_DESC_LEN - fixed_len
+    style_cut  = style[:max(0, avail)]
+    if len(style_cut) < len(style) and style[len(style_cut)] != " ":
+        head, sep, _ = style_cut.rpartition(" ")
+        style_cut = head if sep else style_cut
+    style_trim = style_cut.rstrip()
+    return " ".join(p for p in (prefix, style_trim, suffix) if p)[:MAX_GENERIC_DESC_LEN]
+
+
 def map_sku(row: pd.Series, brand_code: str = "NEW") -> dict:
     item_number    = _s(row.get("Item Number"))
     product_number = _s(row.get("Product Number"))
@@ -1232,6 +1431,16 @@ def validate(mapped: dict, mdd: MDDLoader) -> list[str]:
         if not sil_mdd_id and not sil_coe_id:
             warns.append(f"[{sku}] UNMAPPED Silhouette '{mapped['silhouette']}' — "
                          "AT_Silhouette omitted")
+    # Issue #19 (02-10-2026): Style must resolve against the MDD Style LOV
+    # or the COE fallback (normalized match), else AT_Style is omitted.
+    if mapped.get("detailed_silhouette"):
+        style_hit = (
+            mdd.normalized_lookup("Style", mapped["detailed_silhouette"])
+            if mdd else ""
+        ) or _style_lov_value(mapped["detailed_silhouette"])
+        if not style_hit:
+            warns.append(f"[{sku}] UNMAPPED Detailed Silhouette "
+                         f"'{mapped['detailed_silhouette']}' — AT_Style omitted")
     if mapped.get("target_material") and not mapped.get("material_id"):
         warns.append(f"[{sku}] Material LOV close value unresolved from "
                      "'{mapped['target_material']}' — AT_Material omitted")
@@ -1265,10 +1474,12 @@ def _log_dropped_attributes(mdd: MDDLoader) -> list[str]:
         "AT_CountrySize":             "BM row 130: APP/ACC = Manual input from MD",
         "AT_MaterialUpper":           "BM row 103: APP ACC = N/A",
         "AT_Fastening":               "BM row 104: APP/ACC = N/A",
-        "AT_SAPStyleCode / AT_Generic / AT_GenericDescription / AT_Variant / "
+        "AT_SAPStyleCode / AT_Generic / AT_Variant / "
         "AT_VariantDescription":
             "BM rows 22-26 'Formula in System' (Type C) — computed downstream "
-            "from the BY SAP colour/size response; never guessed here",
+            "from the BY SAP colour/size response; never guessed here. "
+            "(AT_GenericDescription IS emitted since Issue #21, 02-10-2026 — "
+            "sample-module replica.)",
     }
     for at_id, why in dropped.items():
         card = (mdd.attributes.get(at_id, {}).get("cardinality") or "n/a").strip() if mdd else "n/a"
@@ -1367,6 +1578,7 @@ EMITTED_ATTRIBUTE_IDS: list[str] = [
     "AT_LaunchingDate", "AT_IncomingMonth",
     "AT_MaterialType", "AT_SAPArticleCategory", "AT_BYArticleType",
     "AT_SAPProductFlag", "AT_UOM", "AT_ArticleStatus",
+    "AT_GenericDescription",                 # Issue #21 — 02-10-2026
 ]
 
 
@@ -1396,15 +1608,25 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
     _val(vals_el, "AT_PrincipalColorCode",        art["color_code"])
     _val(vals_el, "AT_PrincipalColorName",        art["color_name"])
 
+    # ── Generic Description (Issue #21, 02-10-2026) ───────────────
+    # MAA mapping, max 40 chars: brand(3) + Principal style + (Age/Gender)
+    # + Color — exact replica of the sample modules' implementation. The
+    # colour family is the Color Code - Non-Footwear text minus its vendor
+    # code ("BLACK (BK)" → "BLACK" → BLK).
+    _val(vals_el, "AT_GenericDescription", _build_generic_description(
+        art["brand_code"], art["display_name"] or art["item_number"],
+        art["age_id"], art["gender_id"], _color_family_name(art["color_name"]),
+    ))
+
     # ── Gender Duty - Non-Footwear (BM rows 18/38/96) ─────────────
     gender_max = MAX_GENDER_DESC_CHARS
     if mdd is not None:
         gender_max = mdd.max_chars("AT_PrincipalGenderDescription", MAX_GENDER_DESC_CHARS)
     _val(vals_el, "AT_PrincipalGenderDescription", art["gender_duty"][:gender_max])
     _val(vals_el, "AT_Gender",   art["gender_val"], id_val=art["gender_id"])
-    # Issue #17 (30-09-2026): BY Gender LOV IDs are MEN/WOMEN/UNISEX (live
-    # STEP IDs, by_stibo_response 23-09-2026) — value.upper() sent MALE/
-    # FEMALE, which STIBO silently discarded.
+    # Issue #17 (30-09-2026; LOV corrected 02-10-2026): BY Gender LOV IDs
+    # are M/F/U (COE LOV) — value.upper() sent MALE/FEMALE, which STIBO
+    # silently discarded.
     by_gender_id = BY_GENDER_LOV_ID.get(art["gender_val"], art["gender_val"].upper())
     _val(vals_el, "AT_BYGender", art["gender_val"], id_val=by_gender_id)
 
@@ -1466,10 +1688,26 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
                 )
 
     # ── Detailed Silhouette → AT_Style (LOV value match, runtime) ──
-    if art.get("detailed_silhouette") and mdd is not None:
-        if mdd.lov_value_exists("Style", art["detailed_silhouette"]):
-            _val(vals_el, "AT_Style", art["detailed_silhouette"],
-                 id_val=art["detailed_silhouette"])
+    # Issue #19 (02-10-2026): the strict membership test missed valid
+    # values — the MDD "Style LOV" (single-column, value = ID) carries
+    # keys with trailing spaces ("Bucket ", "Tote ") — leaving AT_Style
+    # blank in UAT. Now matched case/whitespace/punctuation-insensitively
+    # against the MDD first, then the COE 80-value export as fallback, and
+    # the CANONICAL value is emitted as <Value ID="x">x</Value> (the value
+    # IS the ID — no ID column in the LOV). A miss is warned, never
+    # guessed (raw text on a LOV attribute is discarded by STIBO).
+    if art.get("detailed_silhouette"):
+        style_canonical = (
+            mdd.normalized_lookup("Style", art["detailed_silhouette"])
+            if mdd else ""
+        ) or _style_lov_value(art["detailed_silhouette"])
+        if style_canonical:
+            _val(vals_el, "AT_Style", style_canonical, id_val=style_canonical)
+        else:
+            log.warning(
+                "Detailed Silhouette '%s' not in the Style LOV — "
+                "AT_Style omitted", art["detailed_silhouette"],
+            )
 
     # ── Price Segment → BCI (BM row 97; ID best-effort from MDD) ──
     if art.get("price_segment"):
@@ -1481,7 +1719,11 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
         _val(vals_el, "AT_Content", art["content_val"], id_val=art["content_id"])
     if art.get("fabric_id"):
         _val(vals_el, "AT_Fabric",  art["fabric_val"],  id_val=art["fabric_id"])
-    if art.get("material_id"):
+    # Issue #20 (02-10-2026): COE — AT_Material must stay EMPTY for Apparel
+    # articles ("Muncul polyester, seharusnya untuk Apparel tidak terisi"):
+    # soft-goods composition flows through AT_Content/AT_Fabric above, and
+    # AT_Material is reserved for non-Apparel divisions (ACC etc.).
+    if art.get("material_id") and _get_division_code(art.get("product_line", "")) != "A":
         _val(vals_el, "AT_Material", art["material_val"], id_val=art["material_id"])
 
     # ── Product Fit → AT_Fit (close value) ────────────────────────

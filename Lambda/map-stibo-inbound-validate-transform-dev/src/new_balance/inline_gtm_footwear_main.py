@@ -125,12 +125,17 @@ COLUMNS READ BUT *NOT* MAPPED TO STIBO
     AT_PrincipalMerchandiseHierarchyL4 / L5 — BM rows 81/82: Footwear = N/A.
 
   FORMULA-IN-SYSTEM CODES NOT COMPUTED HERE (BM rows 22-26): AT_SAPStyleCode,
-  AT_Generic, AT_GenericDescription, AT_Variant, AT_VariantDescription. Their
-  formulas ("Type A" / brand+style+SAP color+SAP size) depend on the SAP
-  color/size codes that only arrive later via the BY response / AI image
-  analysis — the lambda never guesses them (v1.0 held the same line, then
-  labelled "MAA asked not to send it"; v2.0 keeps them out and cites the
-  spec's "Formula in System" typing instead).
+  AT_Generic, AT_Variant, AT_VariantDescription. Their formulas ("Type A" /
+  brand+style+SAP color+SAP size) depend on the SAP color/size codes that
+  only arrive later via the BY response / AI image analysis — the lambda
+  never guesses them (v1.0 held the same line, then labelled "MAA asked
+  not to send it"; v2.0 keeps them out and cites the spec's "Formula in
+  System" typing instead).
+  AT_GenericDescription IS emitted (Issue #21, 02-10-2026): MAA Generic
+  Description Mapping, max 40 chars — brand(3) + Principal style +
+  (Age/Gender) + Color — an exact replica of the sample modules'
+  implementation (age CH→K / AD→A / AA→O, gender F→W, colour via the
+  AT_TechSAPColorDesc LOV with raw-uppercase fallback).
 
 ────────────────────────────────────────────────────────────────────
 DEVIATIONS (documented, deliberate)
@@ -221,8 +226,10 @@ SOURCE_COLUMNS: dict[str, list[str]] = {
     # Number to Item Number (BM template & v6 updated). Product Number now
     # only feeds the <Name>/description fallback.
     "Product Number":                    ["<Name>/AT_PrincipalStyleDescription fallback"],
-    "Short Product Description":         ["AT_PrincipalStyleDescription", "<Name>"],
-    "Colorway Name":                     ["AT_PrincipalColorName"],
+    "Short Product Description":         ["AT_PrincipalStyleDescription", "<Name>",
+                                          "AT_GenericDescription (style part)"],
+    "Colorway Name":                     ["AT_PrincipalColorName",
+                                          "AT_GenericDescription (color part)"],
     "Adult Gender/ Kids Closure Type":   ["AT_PrincipalGenderDescription",
                                           "AT_Fastening (children branch)",
                                           "AT_Gender/AT_SAPAge fallback"],
@@ -380,13 +387,13 @@ COUNTRY_TO_RETAIL_CURRENCY: dict[str, tuple[str, str]] = {
 # ── Issue #15 (30-09-2026): AT_FOBCurrency — FTW/APP/ACC default USD ─────────
 FOB_CURRENCY_DEFAULT = ("United States Dollar", "USD")
 
-# ── Issue #17 (30-09-2026): AT_BYGender LOV IDs ──────────────────────────────
+# ── Issue #17 (30-09-2026, LOV corrected 02-10-2026): AT_BYGender IDs ─────────
 # Display values Male/Female/Unisex (COE mapping Mens→Male, Womens→Female,
-# Unisex→Unisex); IDs are the live STEP LOV IDs observed on real articles
-# (by_stibo_response 23-09-2026 shows ID="MEN"/"WOMEN"). The previous
-# ID=value.upper() form sent "MALE"/"FEMALE", which STIBO silently discarded.
+# Unisex→Unisex); LOV IDs are M/F/U (COE LOV — same table the BY inbound's
+# _GENDER_LOV_MAP uses). The previous ID=value.upper() form sent MALE/
+# FEMALE, which STIBO silently discarded.
 BY_GENDER_LOV_ID: dict[str, str] = {
-    "Male": "MEN", "Female": "WOMEN", "Unisex": "UNISEX",
+    "Male": "M", "Female": "F", "Unisex": "U",
 }
 
 # MDD "E-com Ages Category LOV" — value → ID
@@ -981,6 +988,81 @@ def _build_generic_code(brand_code: str, item_number: str) -> str:
     return f"{brand}{base}"
 
 
+# ── Generic Description (Issue #21, 02-10-2026) ──────────────────────────────
+# Exact replica of the sample modules' implementation
+# (inline_sample_apparel_main.py): MAA Generic Description Mapping, max 40
+# chars — 3-digit brand code + Principal style + (Age/Gender) + Color.
+MAX_GENERIC_DESC_LEN = 40
+
+# Age / gender labels follow the STEP Generic Description derive
+# ("mapping awal"): IF SAPAge = 'CH' → 'K', 'AD' → 'A', 'AA' → 'O';
+# IF Gender = 'F' → 'W' (Womens). M / U pass through unchanged.
+GENERIC_DESC_AGE_LABEL: dict[str, str] = {
+    "AD": "A",   # Adults
+    "CH": "K",   # Children → K (Kids)
+    "AA": "O",   # All Ages
+}
+
+GENERIC_DESC_GENDER_LABEL: dict[str, str] = {
+    "F": "W",    # Female → W (Womens); M / U pass through
+}
+
+# AT_TechSAPColorDesc LOV — the LOV the STEP Generic Description derive
+# reads (exported from the STEP Workbench on 2026-09-22; keys are SAP
+# colour names, A-Z0-9 normalised; RED stays RED because the Workbench LOV
+# spells it that way).
+TECH_SAP_COLOR_ID: dict[str, str] = {
+    "BLACK": "BLK", "WHITE": "WHT", "GREY": "GRY", "BLUE": "BLU",
+    "GREEN": "GRN", "RED": "RED", "BEIGE": "BEG", "BROWN": "BRN",
+    "YELLOW": "YLW", "ORANGE": "ORG", "PINK": "PNK", "PURPLE": "PUR",
+    "NOCOLOR": "NOO",
+}
+
+
+def _tech_sap_color_id(sap_color_name: str) -> str:
+    """SAP colour name → AT_TechSAPColorDesc LOV id ('' when unmapped)."""
+    key = re.sub(r"[^A-Z0-9]", "", str(sap_color_name or "").upper())
+    return TECH_SAP_COLOR_ID.get(key, "")
+
+
+def _build_generic_description(
+    brand_code: str, style_desc: str,
+    age_code: str, gender_code: str, sap_color_name: str,
+) -> str:
+    """
+    MAA Generic Description Mapping — max 40 chars:
+    3-digit brand code + Principal style + (Age/Gender) + Color.
+
+    Replica of inline_sample_apparel_main._build_generic_description:
+    - Age / gender labels follow the STEP derive ("mapping awal"):
+      GENERIC_DESC_AGE_LABEL CH→K, AD→A, AA→O and gender F→W.
+    - Color uses the AT_TechSAPColorDesc LOV id via _tech_sap_color_id
+      (e.g. NO COLOR → NOO, RED → RED); unmapped names fall back to the
+      raw text uppercased (a GTM colourway like "RICH OAK / CASTLEROCK"
+      is not a SAP family name and takes the fallback).
+    If the result exceeds 40 chars the Principal style is trimmed on a
+    whole-word boundary ("Active Premium", never "Active Premium St").
+    """
+    age_label_desc = GENERIC_DESC_AGE_LABEL.get(age_code, age_code)
+    gender_label   = GENERIC_DESC_GENDER_LABEL.get(gender_code, gender_code)
+    age_gender     = f"({age_label_desc}/{gender_label})" if age_code and gender_code else ""
+    color_desc     = _tech_sap_color_id(sap_color_name) or (sap_color_name or "").strip().upper()
+    prefix = _s(brand_code)[:3]
+    suffix = " ".join(p for p in (age_gender, color_desc) if p)
+    style  = (style_desc or "").strip()
+    result = " ".join(p for p in (prefix, style, suffix) if p)
+    if len(result) <= MAX_GENERIC_DESC_LEN:
+        return result
+    fixed_len  = len(prefix) + (1 if prefix else 0) + len(suffix) + (1 if suffix else 0)
+    avail      = MAX_GENERIC_DESC_LEN - fixed_len
+    style_cut  = style[:max(0, avail)]
+    if len(style_cut) < len(style) and style[len(style_cut)] != " ":
+        head, sep, _ = style_cut.rpartition(" ")
+        style_cut = head if sep else style_cut
+    style_trim = style_cut.rstrip()
+    return " ".join(p for p in (prefix, style_trim, suffix) if p)[:MAX_GENERIC_DESC_LEN]
+
+
 def map_sku(row: pd.Series, brand_code: str = "NEW") -> dict:
     item_number    = _s(row.get("Item Number"))
     product_number = _s(row.get("Product Number"))
@@ -1120,10 +1202,11 @@ def _log_dropped_attributes(mdd: MDDLoader) -> list[str]:
         "AT_PrincipalAgeDescription": "BM row 20: Not Available",
         "AT_PrincipalMerchandiseHierarchyL4": "BM row 81: Footwear = N/A",
         "AT_PrincipalMerchandiseHierarchyL5": "BM row 82: Footwear = N/A",
-        "AT_SAPStyleCode / AT_Generic / AT_GenericDescription / AT_Variant / "
+        "AT_SAPStyleCode / AT_Generic / AT_Variant / "
         "AT_VariantDescription":
             "BM rows 22-26 'Formula in System' — computed downstream from the BY "
-            "SAP colour/size response; never guessed here",
+            "SAP colour/size response; never guessed here. (AT_GenericDescription "
+            "IS emitted since Issue #21, 02-10-2026 — sample-module replica.)",
     }
     for at_id, why in dropped.items():
         card = (mdd.attributes.get(at_id, {}).get("cardinality") or "n/a").strip() if mdd else "n/a"
@@ -1217,6 +1300,7 @@ EMITTED_ATTRIBUTE_IDS: list[str] = [
     "AT_MaterialUpper", "AT_Fastening", "AT_IncomingMonth",
     "AT_MaterialType", "AT_SAPArticleCategory", "AT_BYArticleType",
     "AT_SAPProductFlag", "AT_UOM", "AT_ArticleStatus",
+    "AT_GenericDescription",                 # Issue #21 — 02-10-2026
 ]
 
 
@@ -1247,6 +1331,14 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
     _val(vals_el, "AT_PrincipalStyleDescription",
          art["short_desc"] or art["item_number"])
 
+    # ── Generic Description (Issue #21, 02-10-2026) ───────────────
+    # MAA mapping, max 40 chars: brand(3) + Principal style + (Age/Gender)
+    # + Color — exact replica of the sample modules' implementation.
+    _val(vals_el, "AT_GenericDescription", _build_generic_description(
+        art["brand_code"], art["short_desc"] or art["item_number"],
+        art["age_id"], art["gender_id"], art["colorway"],
+    ))
+
     # ── Colorway Name minus the Item Number prefix (BM row 16) ────
     _val(vals_el, "AT_PrincipalColorName", art["colorway"])
 
@@ -1262,9 +1354,9 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
     # ── Item Number 1st letter → SAP/BY gender & age (BM rows 37/38/95/96)
     _val(vals_el, "AT_Gender",   art["gender_val"], id_val=art["gender_id"])
     _val(vals_el, "AT_SAPAge",   art["age_val"],    id_val=art["age_id"])
-    # Issue #17 (30-09-2026): BY Gender LOV IDs are MEN/WOMEN/UNISEX (live
-    # STEP IDs, by_stibo_response 23-09-2026) — value.upper() sent MALE/
-    # FEMALE, which STIBO silently discarded.
+    # Issue #17 (30-09-2026; LOV corrected 02-10-2026): BY Gender LOV IDs
+    # are M/F/U (COE LOV) — value.upper() sent MALE/FEMALE, which STIBO
+    # silently discarded.
     by_gender_id = BY_GENDER_LOV_ID.get(art["by_gender"], art["by_gender"].upper())
     _val(vals_el, "AT_BYGender", art["by_gender"],  id_val=by_gender_id)
     _val(vals_el, "AT_BYAge",    art["by_age"],     id_val=art["by_age_id"])

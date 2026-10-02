@@ -776,8 +776,9 @@ def _build_generic_description(
       (e.g. NO COLOR → NOO, RED → RED) — identical to the attribute the
       STEP Generic Description derive reads.
     Example output: "NEW SPL SP27 Sport Short 5\" (A/U) NOO"
-    If the result exceeds 40 chars the Principal style is progressively
-    trimmed from the right until it fits.
+    If the result exceeds 40 chars the Principal style is trimmed on a
+    whole-word boundary (Issue #10: "Active Premium", never "Active
+    Premium St").
     """
     age_label_desc = GENERIC_DESC_AGE_LABEL.get(age_code, age_code)
     gender_label   = GENERIC_DESC_GENDER_LABEL.get(gender_code, gender_code)
@@ -791,7 +792,16 @@ def _build_generic_description(
         return result
     fixed_len  = len(prefix) + (1 if prefix else 0) + len(suffix) + (1 if suffix else 0)
     avail      = MAX_GENERIC_DESC_LEN - fixed_len
-    style_trim = style[:max(0, avail)].rstrip()
+    # Issue #10 (02-10-2026): trim the style on a whole-word boundary —
+    # "Active Premium", never "Active Premium St". A cut that already lands
+    # on a word end is kept as-is; a window with no complete word (single-
+    # token style) falls back to the hard cut so the 40-char MDD maximum
+    # is never exceeded.
+    style_cut  = style[:max(0, avail)]
+    if len(style_cut) < len(style) and style[len(style_cut)] != " ":
+        head, sep, _ = style_cut.rpartition(" ")
+        style_cut = head if sep else style_cut
+    style_trim = style_cut.rstrip()
     return " ".join(p for p in (prefix, style_trim, suffix) if p)[:MAX_GENERIC_DESC_LEN]
 
 

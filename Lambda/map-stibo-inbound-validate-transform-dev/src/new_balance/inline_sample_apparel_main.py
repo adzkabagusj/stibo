@@ -251,6 +251,11 @@ SAP_PRODUCT_FLAG_INTERCOMPANY = ("A", "Intercompany")
 # MDD "UOM LOV" — EA = Each (v6 R103 default)
 UOM_EACH = ("EA", "Each")
 
+# ── Issue #11 (02-10-2026): AT_FOBCurrency — FTW/APP/ACC default USD ────────
+#    Same default as inline_gtm_footwear_main.py (Issue #15).  Currency only:
+#    sample flows carry no FOB amount (prices come via Smartsheet).
+FOB_CURRENCY_DEFAULT = ("United States Dollar", "USD")
+
 # ── v6 R051 App rule: SKU first letter → SAP Gender code ────────────────────
 #   W : Female   M : Male   Y : Unisex   (anything else defaults to Unisex
 #   and is logged as a validation warning)
@@ -1025,6 +1030,7 @@ EMITTED_ATTRIBUTE_IDS: list[str] = [
     "AT_PrincipalMerchandiseHierarchyL1", "AT_PrincipalMerchandiseHierarchyL2",
     "AT_SAPArticleCategory", "AT_BYArticleType", "AT_NatureOfArticle",
     "AT_MaterialType", "AT_SAPProductFlag", "AT_UOM",
+    "AT_FOBCurrency",                 # Issue #11 — Default: USD
     "AT_EcomIndicator", "AT_MainVendorIdentification", "AT_ArticleStatus",
     "AT_InboundGenericCode",
     "AT_PricingDistributionChannel",  # Issue #3 — Default: Retailer
@@ -1147,6 +1153,12 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
 
     uom_id, uom_label = UOM_EACH                                       # EA
     _val(vals_el, "AT_UOM", uom_label, id_val=uom_id)
+
+    # ── Issue #11 (02-10-2026): FOB Currency — FTW/APP/ACC default USD.
+    #    Currency only: sample flows carry no FOB amount (prices come via
+    #    Smartsheet) — same default as inline_gtm_footwear_main.py (Issue #15).
+    fob_cur_val, fob_cur_id = FOB_CURRENCY_DEFAULT
+    _val(vals_el, "AT_FOBCurrency", fob_cur_val, id_val=fob_cur_id)
 
     # v6 R025: Ecom Indicator — Manual input / Default : No
     _val(vals_el, "AT_EcomIndicator", "No", id_val="N")

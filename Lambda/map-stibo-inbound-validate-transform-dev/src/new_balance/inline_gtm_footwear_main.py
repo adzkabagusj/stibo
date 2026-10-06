@@ -176,6 +176,12 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import openpyxl
+
+import ref_grouping_sql
+
+# AT_BrandCategory — SQL DB_TOOLS.MST.REF_GROUPING, loaded once per run() (New Balance = "NEW").
+_BRAND_CATEGORIES: dict | None = None
+_BC_WARNED: set = set()
 import pandas as pd
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1457,9 +1463,12 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
     if country_code in PORTAL_COUNTRY_LOV:
         _val(vals_el, "AT_Country", id_val=country_code)
 
-        # Issue #12: Brand Category — "{Country} - {SBU} - TOP" (NB = SP,
-        # TOP for every portal country; identity LOV — value = ID).
-        brand_cat = _brand_category_value(country_code, sbu)
+        # Issue #12: Brand Category — now from SQL DB_TOOLS.MST.REF_GROUPING,
+        # exact match on country + company code + SBU + "NEW" (identity LOV —
+        # value = ID). _brand_category_value() is no longer used for it.
+        brand_cat = ref_grouping_sql.brand_category_for_key(
+            _BRAND_CATEGORIES, "NEW", country_code, comp_code, sbu, _BC_WARNED,
+        )
         if brand_cat:
             _val(vals_el, "AT_BrandCategory", brand_cat, id_val=brand_cat)
         else:
@@ -1578,6 +1587,10 @@ def run(args, auditor=None):
     Entry point called by new_balance/lambda_function.py (or CLI).
     args must have: brand, brand_code, comp_code, sbu, season, seq
     """
+    global _BRAND_CATEGORIES
+    _BRAND_CATEGORIES = ref_grouping_sql.load_for_run("NEW", auditor)
+    _BC_WARNED.clear()
+
     def first(d: Path):
         files = [f for pat in ("*.xlsx", "*.xlsm") for f in d.glob(pat)]
         return files[0] if files else None

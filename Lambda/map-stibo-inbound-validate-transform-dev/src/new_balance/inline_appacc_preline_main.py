@@ -52,21 +52,27 @@ COLUMN → ATTRIBUTE MAP (v2.0 — every column of the S2'27 Preline sheet)
     Silhouette                → AT_PrincipalMerchandiseHierarchyL3 [BM row 80]
                                → AT_Silhouette (LOV — ID resolved from the
                                  MDD "Silhouette LOV" at runtime, with the
-                                 COE 60-value LOV as fallback — Issue #18,
-                                 30-09-2026)                       [BM row 101]
+                                 COE+MDD fallback table (IDs 01-78) —
+                                 Issues #18 30-09/07-10-2026)  [BM row 101]
     GBU                       → AT_PrincipalMerchandiseHierarchyL4 [BM row 81]
     Detailed Silhouette       → AT_PrincipalMerchandiseHierarchyL5 [BM row 82]
                                → AT_Style (single-column LOV — normalized
                                  match against the MDD "Style LOV" values
-                                 at runtime)                     [BM row 110]
+                                 at runtime, plus the COE-confirmed close
+                                 values: Duffel→Duffel Bags, Visor→Visors,
+                                 Waistpack→Waist Bag, Cap→Baseball Cap,
+                                 sock-cut family — Issue #19, 07-10-2026)
+                                                                  [BM row 110]
     Price Segment             → AT_BCI                          [BM row 97]
     Product Fit               → AT_Fit (LOV close value)        [BM row 109]
     Target Principal Material → AT_Content / AT_Fabric / AT_Material (LOV
                                  close values)                   [BM rows 106/107/111]
-                                 (AT_Material: non-Apparel divisions only —
-                                  Issue #20, 02-10-2026: COE keeps Material
-                                  empty for Apparel; composition flows via
-                                  AT_Content/AT_Fabric)
+                                 Division scoping (Issues #20/#21/#22,
+                                 02-10/07-10-2026): Content = APP only
+                                 ("tidak ada BY Content untuk Acc"),
+                                 Fabric = APP+ACC via the 43-value COE LOV
+                                 (same list as Material), Material = ACC
+                                 only (empty for Apparel)
     Country Of Origin         → AT_CountryOrigin                [BM row 41]
                                  ("VNM - Viet Nam" → VNM → VN/Vietnam)
     Technologies              → AT_TechnologyUsed               [BM row 158]
@@ -272,8 +278,9 @@ SOURCE_COLUMNS: dict[str, list[str]] = {
                                     "AT_Style", "AT_Collection1 (component)"],
     "Price Segment":               ["AT_BCI"],
     "Product Fit":                 ["AT_Fit"],
-    "Target Principal Material":   ["AT_Content", "AT_Fabric",
-                                    "AT_Material (non-Apparel only — Issue #20)"],
+    "Target Principal Material":   ["AT_Content (APP only — Issue #22)",
+                                    "AT_Fabric (43-value LOV — Issue #21)",
+                                    "AT_Material (ACC only — Issue #20)"],
     "Country Of Origin":           ["AT_CountryOrigin"],
     "Technologies":                ["AT_TechnologyUsed"],
     "Product Collection":          ["AT_Collection2"],
@@ -456,11 +463,15 @@ BY_GENDER_LOV_ID: dict[str, str] = {
     "Male": "M", "Female": "F", "Unisex": "U",
 }
 
-# ── Issue #18 (30-09-2026): AT_Silhouette LOV — COE export 30-09-2026 ────────
-# 60 values, IDs zero-padded "01".."60" (same convention as
-# LOV_SPORTS_CATEGORY_ID). Used as the fallback when the runtime MDD
-# "Silhouette LOV" lookup misses — the UAT run showed the MDD sheet alone
-# resolves nothing, leaving AT_Silhouette blank.
+# ── Issue #18 (30-09-2026; extended 07-10-2026): AT_Silhouette LOV ────────────
+# COE export 30-09-2026: 60 values, IDs zero-padded "01".."60" (same
+# convention as LOV_SPORTS_CATEGORY_ID). Used as the fallback when the
+# runtime MDD "Silhouette LOV" lookup misses — the 02-10 UAT run proved the
+# deployed MDD download can be STALE (missing the 61-78 rows), which left
+# AT_Silhouette blank for every APP/ACC-specific silhouette ("Socks",
+# "S/S Top", "Jacket", …). Extended 07-10-2026 with the 18 APP/ACC values
+# the current MDD "Silhouette LOV" carries at IDs 61-78, so resolution no
+# longer depends on the freshness of the runtime MDD file.
 LOV_SILHOUETTE_ID: dict[str, str] = {
     "Aqua Shorts":            "01", "Athleisure":            "02",
     "Backstrap":              "03", "Ballerina":             "04",
@@ -492,6 +503,17 @@ LOV_SILHOUETTE_ID: dict[str, str] = {
     "Tights (Full Length)":   "55", "Tights (Short)":        "56",
     "Toe Ring":               "57", "Underwear":             "58",
     "Unknown":                "59", "Watershorts":           "60",
+    # MDD "Silhouette LOV" IDs 61-78 — the APP/ACC-specific values the S2'27
+    # sheet uses (added to the LOV for this NB flow). Issue #18, 07-10-2026.
+    "S/S Top":                "61", "Pant":                  "62",
+    "Short":                  "63", "Socks":                 "64",
+    "Tight":                  "65", "Headwear":              "66",
+    "Arm Sleeve":             "67", "Hoodies & Sweatshirts": "68",
+    "L/S Top":                "69", "Jacket":                "70",
+    "Bag":                    "71", "Tanks/Sleeveless/Singlet": "72",
+    "Sports Bra":             "73", "Outerwear":             "74",
+    "Glove":                  "75", "Vest":                  "76",
+    "Fitness":                "77", "One-Piece":             "78",
 }
 
 # Case/punctuation-insensitive index over LOV_SILHOUETTE_ID so source values
@@ -512,13 +534,16 @@ def _silhouette_lov_id(value: str) -> tuple[str, str]:
     return hit if hit else ("", "")
 
 # ── Issue #19 (02-10-2026): AT_Style LOV — COE export 02-10-2026 ─────────────
-# Single-column LOV: no ID column, so the VALUE IS THE ID (same convention
-# as the Franchise LOV — by_inbound.py). Emitted as <Value ID="x">x</Value>.
-# Accessories-only: apparel Detailed Silhouettes (e.g. "Shorts") have no
-# entry and are warned + omitted until the STEP LOV is extended. The MDD
-# "Style LOV" sheet mirrors this list (with trailing-space quirks like
-# "Bucket " / "Tote ") and stays the primary source; this export is the
-# fallback when the runtime MDD sheet misses.
+# Single-column LOV (STEP Domains-style: one "Value" column, no ID column —
+# confirmed on the live workbench 07-10-2026). Such LOVs must be written as
+# PLAIN TEXT with no ID attribute: sending the value as an ID makes STIBO
+# silently discard it — the exact lesson by_inbound.py records for the
+# Franchise LOV ("Sending it as an id made STIBO discard it silently —
+# UAT 2026-09-22"). Accessories-only: apparel Detailed Silhouettes (e.g.
+# "Shorts") have no entry and are warned + omitted until the STEP LOV is
+# extended. The MDD "Style LOV" sheet mirrors this list (with trailing-space
+# quirks like "Bucket " / "Tote ") and stays the primary source; this export
+# is the fallback when the runtime MDD sheet misses.
 LOV_STYLE_VALUES: tuple[str, ...] = (
     "Arm Sleeves", "Backpack", "Badminton Racquette", "Baguette",
     "Baseball Cap", "Basket Balls", "Beanie", "Belt",
@@ -550,13 +575,76 @@ _STYLE_NORM_INDEX: dict[str, str] = {
 
 def _style_lov_value(value: str) -> str:
     """Resolve a Detailed Silhouette source value against the COE Style LOV.
-    Returns the canonical value ('' when unmatched) — value IS the ID."""
+    Returns the canonical value ('' when unmatched) — written as plain text
+    (Domains-style LOV: no ID column, no ID attribute on the Value)."""
     raw = (value or "").strip()
     if not raw:
         return ""
     if raw in LOV_STYLE_VALUES:
         return raw
     return _STYLE_NORM_INDEX.get(re.sub(r"[^A-Z0-9]", "", raw.upper()), "")
+
+# ── Issue #19 (07-10-2026): AT_Style close values ────────────────────────────
+# UAT 02-10: the S2'27 ACC Detailed Silhouettes barely overlap the Style LOV
+# ("Crew", "Cap", "Quarter", "Visor", …) so AT_Style stayed blank. The COE
+# rule stays "Mapping from Detailed Silhouette" — resolved here through
+# close values (BM row 110: "system to generate close value", the same
+# philosophy the spec pins for Material -Upper).
+# Tier 1 — name-form variants / closest values of live Style LOV entries:
+STYLE_CLOSE_ALIAS: dict[str, str] = {
+    "Duffel":     "Duffel Bags",   # LOV carries the compound "Duffel Bags"
+    "Duffle":     "Duffel Bags",
+    "Visor":      "Visors",        # LOV carries the plural
+    "Waistpack":  "Waist Bag",     # LOV: "Waist Bag" (two words)
+    "Sling":      "Sling Bag",     # LOV: "Sling Bag"
+    "Crossbody":  "Sling Bag",     # crossbody ≈ sling bag (worn across body)
+    "Grip":       "Grips",         # LOV carries the plural
+    "Sackpack":   "Gym Sack",      # NB "Sackpack" = drawstring gym sack
+    "Cap":        "Baseball Cap",  # generic cap → the LOV's generic cap value
+}
+# Tier 2 — sock-cut family (Silhouette == "Socks"). The LOV spells sock
+# styles "{Lifestyle|Performance} {No Show|Low Cut|Mid Cut} Socks"; the
+# family is picked from Line Plan Business (performance lines → Performance).
+STYLE_SOCK_CUT_TO_LOV_CUT: dict[str, str] = {
+    "No Show": "No Show",   # exact cut name in the LOV
+    "Low Cut": "Low Cut",   # exact cut name in the LOV
+    "Quarter": "Mid Cut",   # quarter = just above the ankle → mid cut
+    "Crew":    "Mid Cut",   # crew = classic everyday length → mid cut
+}
+STYLE_PERFORMANCE_LPB: set[str] = {"RUNNING", "TRAINING", "KIDS PERFORMANCE"}
+
+
+def _style_close_value(
+    mdd: "MDDLoader | None", detailed_silhouette: str,
+    silhouette: str, line_plan_biz: str,
+) -> str:
+    """
+    Issue #19 (07-10-2026): full Detailed Silhouette → AT_Style resolution.
+    Precedence: MDD "Style LOV" (normalized) → COE 80-value export
+    (normalized) → close-value aliases above. Returns the canonical LOV
+    value ('' when unmatched — caller warns, never guesses raw text).
+    """
+    raw = _s(detailed_silhouette)
+    if not raw:
+        return ""
+    direct = (mdd.normalized_lookup("Style", raw) if mdd else "") or _style_lov_value(raw)
+    if direct:
+        return direct
+    alias = STYLE_CLOSE_ALIAS.get(_s(raw).title(), "")
+    if alias and _style_lov_value(alias):
+        return _style_lov_value(alias)
+    if _s(silhouette).upper().strip() == "SOCKS":
+        cut = STYLE_SOCK_CUT_TO_LOV_CUT.get(_s(raw).title())
+        if cut:
+            family = (
+                "Performance"
+                if _s(line_plan_biz).upper().strip() in STYLE_PERFORMANCE_LPB
+                else "Lifestyle"
+            )
+            cand = f"{family} {cut} Socks"
+            if _style_lov_value(cand):
+                return _style_lov_value(cand)
+    return ""
 
 # ── Line Plan Business → Sports Category (BM row 121, verbatim) ─────────────
 LOV_LINE_PLAN_TO_SPORTS_CAT: dict[str, str] = {
@@ -710,11 +798,15 @@ CONTENT_LOV_CLOSE: dict[str, tuple] = {           # MDD "Content LOV"
     "NYLON":         ("NYLON", "Nylon"),
     "NYLON WOVEN":   ("NYLON", "Nylon"),
 }
-FABRIC_LOV_CLOSE: dict[str, tuple] = {            # MDD "Fabric LOV"
-    "COTTON JERSEY": ("JE", "Jersey"),
-    "COTTON FLEECE": ("FL", "Fleece"),
-    "COTTON TWILL":  ("TW", "Twill"),
-}
+# ── Issue #21 (07-10-2026): AT_Fabric LOV = the COE 43-value Material LOV ────
+# COE 07-10-2026: the live Fabric LOV is the SAME 43-value list as Material
+# (Acrylic/ACR … Wool/WOL — table provided with UAT issue #21). The old
+# Fabric close map (Jersey/JE, Fleece/FL, Twill/TW from the MDD "Fabric
+# LOV" sheet) sent IDs STIBO does not recognise, so every AT_Fabric value
+# was silently discarded in the 02-10 UAT run. Fabric now resolves through
+# the full alias table (Poly Knit/Polywoven → PES Polyester, Cotton
+# Jersey/Fleece/Twill → COT Cotton, Nylon Woven → NYL Nylon, …).
+FABRIC_LOV_CLOSE: dict[str, tuple] = dict(MATERIAL_LOV_CLOSE)
 
 # Product Line → Division letter (for PPH parent and division code)
 DIVISION_PARENT_MAP: dict[str, str] = {
@@ -1206,11 +1298,19 @@ def _build_generic_code(brand_code: str, item_number: str) -> str:
     return f"{brand}{base}"
 
 
-# ── Generic Description (Issue #21, 02-10-2026) ──────────────────────────────
-# Exact replica of the sample modules' implementation
-# (inline_sample_apparel_main.py): MAA Generic Description Mapping, max 40
-# chars — 3-digit brand code + Principal style + (Age/Gender) + Color.
+# ── Generic Description (Issue #21, 02-10-2026; cap corrected #23, 07-10) ───
+# MAA Generic Description Mapping, "Max 40 Digits": 3-digit brand code +
+# Principal style + (Age/Gender) + Color. The 07-10-2026 UAT retest showed
+# the cap counts characters EXCLUDING spaces (COE expected
+# "NEW A - Athletics Script Crew Socks 2 (A/U) WHT" — 47 chars with spaces,
+# 38 without — to PASS), so _generic_desc_digits() is the measuring stick.
 MAX_GENERIC_DESC_LEN = 40
+
+
+def _generic_desc_digits(s: str) -> int:
+    """Generic Description length in "digits" — every character except
+    whitespace (Issue #23, 07-10-2026)."""
+    return len(re.sub(r"\s+", "", s or ""))
 
 # Age / gender labels follow the STEP Generic Description derive
 # ("mapping awal"): IF SAPAge = 'CH' → 'K', 'AD' → 'A', 'AA' → 'O';
@@ -1255,17 +1355,23 @@ def _build_generic_description(
     age_code: str, gender_code: str, sap_color_name: str,
 ) -> str:
     """
-    MAA Generic Description Mapping — max 40 chars:
+    MAA Generic Description Mapping — max 40 DIGITS ("Max 40 Digits" — the
+    cap counts characters EXCLUDING spaces, Issue #23, 07-10-2026):
     3-digit brand code + Principal style + (Age/Gender) + Color.
 
-    Replica of inline_sample_apparel_main._build_generic_description:
+    Replica of inline_sample_apparel_main._build_generic_description
+    (originally), with the 07-10-2026 cap correction:
     - Age / gender labels follow the STEP derive ("mapping awal"):
       GENERIC_DESC_AGE_LABEL CH→K, AD→A, AA→O and gender F→W.
     - Color uses the AT_TechSAPColorDesc LOV id via _tech_sap_color_id
       (e.g. NO COLOR → NOO, RED → RED); unmapped names fall back to the
       raw text uppercased.
-    If the result exceeds 40 chars the Principal style is trimmed on a
-    whole-word boundary ("Active Premium", never "Active Premium St").
+    When the value exceeds 40 non-space characters the Principal style is
+    trimmed on whole-word boundaries from the END, e.g. (UAT issue #23):
+      "NEW A - Athletics Script Crew Socks 2 Pack (A/U) WHT"  (42 digits)
+      → "NEW A - Athletics Script Crew Socks 2 (A/U) WHT"      (38 digits)
+    A single-token style that still exceeds the budget falls back to a
+    hard cut on the non-space budget so the cap is never exceeded.
     """
     age_label_desc = GENERIC_DESC_AGE_LABEL.get(age_code, age_code)
     gender_label   = GENERIC_DESC_GENDER_LABEL.get(gender_code, gender_code)
@@ -1275,16 +1381,20 @@ def _build_generic_description(
     suffix = " ".join(p for p in (age_gender, color_desc) if p)
     style  = (style_desc or "").strip()
     result = " ".join(p for p in (prefix, style, suffix) if p)
-    if len(result) <= MAX_GENERIC_DESC_LEN:
+    if _generic_desc_digits(result) <= MAX_GENERIC_DESC_LEN:
         return result
-    fixed_len  = len(prefix) + (1 if prefix else 0) + len(suffix) + (1 if suffix else 0)
-    avail      = MAX_GENERIC_DESC_LEN - fixed_len
-    style_cut  = style[:max(0, avail)]
-    if len(style_cut) < len(style) and style[len(style_cut)] != " ":
-        head, sep, _ = style_cut.rpartition(" ")
-        style_cut = head if sep else style_cut
-    style_trim = style_cut.rstrip()
-    return " ".join(p for p in (prefix, style_trim, suffix) if p)[:MAX_GENERIC_DESC_LEN]
+    words = style.split()
+    while words and _generic_desc_digits(
+        " ".join(p for p in (prefix, " ".join(words), suffix) if p)
+    ) > MAX_GENERIC_DESC_LEN:
+        words.pop()
+    style_trim = " ".join(words)
+    if not words:
+        budget = max(
+            0, MAX_GENERIC_DESC_LEN - _generic_desc_digits(prefix) - _generic_desc_digits(suffix)
+        )
+        style_trim = re.sub(r"\s+", "", style)[:budget]
+    return " ".join(p for p in (prefix, style_trim, suffix) if p)
 
 
 def map_sku(row: pd.Series, brand_code: str = "NEW") -> dict:
@@ -1437,14 +1547,16 @@ def validate(mapped: dict, mdd: MDDLoader) -> list[str]:
         if not sil_mdd_id and not sil_coe_id:
             warns.append(f"[{sku}] UNMAPPED Silhouette '{mapped['silhouette']}' — "
                          "AT_Silhouette omitted")
-    # Issue #19 (02-10-2026): Style must resolve against the MDD Style LOV
-    # or the COE fallback (normalized match), else AT_Style is omitted.
+    # Issue #19 (02-10/07-10-2026): Style must resolve against the MDD Style
+    # LOV, the COE fallback or a close-value alias, else AT_Style is omitted.
+    # The Style LOV is accessories-only, so the warning scopes to ACC rows —
+    # APP Detailed Silhouettes (S/S Tee, Shorts, …) can never resolve there.
     if mapped.get("detailed_silhouette"):
-        style_hit = (
-            mdd.normalized_lookup("Style", mapped["detailed_silhouette"])
-            if mdd else ""
-        ) or _style_lov_value(mapped["detailed_silhouette"])
-        if not style_hit:
+        style_hit = _style_close_value(
+            mdd, mapped["detailed_silhouette"],
+            mapped.get("silhouette", ""), mapped.get("line_plan_biz", ""),
+        )
+        if not style_hit and _get_division_code(mapped.get("division", "")) == "E":
             warns.append(f"[{sku}] UNMAPPED Detailed Silhouette "
                          f"'{mapped['detailed_silhouette']}' — AT_Style omitted")
     if mapped.get("target_material") and not mapped.get("material_id"):
@@ -1694,21 +1806,26 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
                 )
 
     # ── Detailed Silhouette → AT_Style (LOV value match, runtime) ──
-    # Issue #19 (02-10-2026): the strict membership test missed valid
-    # values — the MDD "Style LOV" (single-column, value = ID) carries
-    # keys with trailing spaces ("Bucket ", "Tote ") — leaving AT_Style
-    # blank in UAT. Now matched case/whitespace/punctuation-insensitively
-    # against the MDD first, then the COE 80-value export as fallback, and
-    # the CANONICAL value is emitted as <Value ID="x">x</Value> (the value
-    # IS the ID — no ID column in the LOV). A miss is warned, never
-    # guessed (raw text on a LOV attribute is discarded by STIBO).
+    # Issue #19 (02-10/07-10-2026): the strict membership test missed valid
+    # values — the MDD "Style LOV" carries keys with trailing spaces
+    # ("Bucket ", "Tote ") — leaving AT_Style blank in UAT. 07-10-2026:
+    # _style_close_value() adds the COE-confirmed close values (Duffel→
+    # Duffel Bags, Visor→Visors, Waistpack→Waist Bag, Sling→Sling Bag,
+    # Cap→Baseball Cap, and the sock-cut family "{Lifestyle|Performance}
+    # {No Show|Low Cut|Mid Cut} Socks" keyed on Silhouette="Socks" + Line
+    # Plan Business). The resolved value is written as PLAIN TEXT — no ID
+    # attribute: the live Style LOV is a Domains-style single-column list
+    # (no ID column), and an ID-based value is silently discarded by STIBO
+    # (same lesson as the Franchise LOV, by_inbound.py UAT 2026-09-22).
+    # A miss is warned, never guessed (raw text outside the LOV is also
+    # discarded by STIBO).
     if art.get("detailed_silhouette"):
-        style_canonical = (
-            mdd.normalized_lookup("Style", art["detailed_silhouette"])
-            if mdd else ""
-        ) or _style_lov_value(art["detailed_silhouette"])
+        style_canonical = _style_close_value(
+            mdd, art["detailed_silhouette"],
+            art.get("silhouette", ""), art.get("line_plan_biz", ""),
+        )
         if style_canonical:
-            _val(vals_el, "AT_Style", style_canonical, id_val=style_canonical)
+            _val(vals_el, "AT_Style", style_canonical)
         else:
             log.warning(
                 "Detailed Silhouette '%s' not in the Style LOV — "
@@ -1721,15 +1838,19 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
         _val(vals_el, "AT_BCI", art["price_segment"], id_val=bci_id)
 
     # ── Target Principal Material → Content / Fabric / Material ────
-    if art.get("content_id"):
+    # Division scoping (COE, UAT issues #20/#22, 07-10-2026):
+    #   AT_Content  — APP only ("tidak ada BY Content untuk Acc": STEP flags
+    #                 a Content value on an Accessories object as invalid)
+    #   AT_Fabric   — APP and ACC (full 43-value LOV, Issue #21)
+    #   AT_Material — ACC only (COE keeps Material empty for Apparel;
+    #                 Issue #20: "Muncul polyester, seharusnya untuk Apparel
+    #                 tidak terisi")
+    div_code = _get_division_code(art.get("product_line", ""))
+    if art.get("content_id") and div_code != "E":
         _val(vals_el, "AT_Content", art["content_val"], id_val=art["content_id"])
     if art.get("fabric_id"):
         _val(vals_el, "AT_Fabric",  art["fabric_val"],  id_val=art["fabric_id"])
-    # Issue #20 (02-10-2026): COE — AT_Material must stay EMPTY for Apparel
-    # articles ("Muncul polyester, seharusnya untuk Apparel tidak terisi"):
-    # soft-goods composition flows through AT_Content/AT_Fabric above, and
-    # AT_Material is reserved for non-Apparel divisions (ACC etc.).
-    if art.get("material_id") and _get_division_code(art.get("product_line", "")) != "A":
+    if art.get("material_id") and div_code != "A":
         _val(vals_el, "AT_Material", art["material_val"], id_val=art["material_id"])
 
     # ── Product Fit → AT_Fit (close value) ────────────────────────

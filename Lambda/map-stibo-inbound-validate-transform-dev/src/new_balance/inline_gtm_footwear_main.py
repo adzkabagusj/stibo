@@ -131,11 +131,11 @@ COLUMNS READ BUT *NOT* MAPPED TO STIBO
   never guesses them (v1.0 held the same line, then labelled "MAA asked
   not to send it"; v2.0 keeps them out and cites the spec's "Formula in
   System" typing instead).
-  AT_GenericDescription IS emitted (Issue #21, 02-10-2026): MAA Generic
-  Description Mapping, max 40 chars — brand(3) + Principal style +
-  (Age/Gender) + Color — an exact replica of the sample modules'
-  implementation (age CH→K / AD→A / AA→O, gender F→W, colour via the
-  AT_TechSAPColorDesc LOV with raw-uppercase fallback).
+  AT_GenericDescription IS emitted (Issue #21, 02-10-2026; cap corrected
+  #23, 07-10-2026): MAA Generic Description Mapping, max 40 digits (non-
+  space chars) — brand(3) + Principal style + (Age/Gender) + Color (age
+  CH→K / AD→A / AA→O, gender F→W, colour via the AT_TechSAPColorDesc LOV
+  with raw-uppercase fallback).
 
 ────────────────────────────────────────────────────────────────────
 DEVIATIONS (documented, deliberate)
@@ -994,11 +994,19 @@ def _build_generic_code(brand_code: str, item_number: str) -> str:
     return f"{brand}{base}"
 
 
-# ── Generic Description (Issue #21, 02-10-2026) ──────────────────────────────
-# Exact replica of the sample modules' implementation
-# (inline_sample_apparel_main.py): MAA Generic Description Mapping, max 40
-# chars — 3-digit brand code + Principal style + (Age/Gender) + Color.
+# ── Generic Description (Issue #21, 02-10-2026; cap corrected #23, 07-10) ───
+# MAA Generic Description Mapping, "Max 40 Digits": 3-digit brand code +
+# Principal style + (Age/Gender) + Color. The 07-10-2026 UAT retest showed
+# the cap counts characters EXCLUDING spaces (COE expected
+# "NEW A - Athletics Script Crew Socks 2 (A/U) WHT" — 47 chars with spaces,
+# 38 without — to PASS), so _generic_desc_digits() is the measuring stick.
 MAX_GENERIC_DESC_LEN = 40
+
+
+def _generic_desc_digits(s: str) -> int:
+    """Generic Description length in "digits" — every character except
+    whitespace (Issue #23, 07-10-2026)."""
+    return len(re.sub(r"\s+", "", s or ""))
 
 # Age / gender labels follow the STEP Generic Description derive
 # ("mapping awal"): IF SAPAge = 'CH' → 'K', 'AD' → 'A', 'AA' → 'O';
@@ -1036,18 +1044,24 @@ def _build_generic_description(
     age_code: str, gender_code: str, sap_color_name: str,
 ) -> str:
     """
-    MAA Generic Description Mapping — max 40 chars:
+    MAA Generic Description Mapping — max 40 DIGITS ("Max 40 Digits" — the
+    cap counts characters EXCLUDING spaces, Issue #23, 07-10-2026):
     3-digit brand code + Principal style + (Age/Gender) + Color.
 
-    Replica of inline_sample_apparel_main._build_generic_description:
+    Replica of inline_sample_apparel_main._build_generic_description
+    (originally), with the 07-10-2026 cap correction:
     - Age / gender labels follow the STEP derive ("mapping awal"):
       GENERIC_DESC_AGE_LABEL CH→K, AD→A, AA→O and gender F→W.
     - Color uses the AT_TechSAPColorDesc LOV id via _tech_sap_color_id
       (e.g. NO COLOR → NOO, RED → RED); unmapped names fall back to the
       raw text uppercased (a GTM colourway like "RICH OAK / CASTLEROCK"
       is not a SAP family name and takes the fallback).
-    If the result exceeds 40 chars the Principal style is trimmed on a
-    whole-word boundary ("Active Premium", never "Active Premium St").
+    When the value exceeds 40 non-space characters the Principal style is
+    trimmed on whole-word boundaries from the END, e.g. (UAT issue #23):
+      "NEW A - Athletics Script Crew Socks 2 Pack (A/U) WHT"  (42 digits)
+      → "NEW A - Athletics Script Crew Socks 2 (A/U) WHT"      (38 digits)
+    A single-token style that still exceeds the budget falls back to a
+    hard cut on the non-space budget so the cap is never exceeded.
     """
     age_label_desc = GENERIC_DESC_AGE_LABEL.get(age_code, age_code)
     gender_label   = GENERIC_DESC_GENDER_LABEL.get(gender_code, gender_code)
@@ -1057,16 +1071,20 @@ def _build_generic_description(
     suffix = " ".join(p for p in (age_gender, color_desc) if p)
     style  = (style_desc or "").strip()
     result = " ".join(p for p in (prefix, style, suffix) if p)
-    if len(result) <= MAX_GENERIC_DESC_LEN:
+    if _generic_desc_digits(result) <= MAX_GENERIC_DESC_LEN:
         return result
-    fixed_len  = len(prefix) + (1 if prefix else 0) + len(suffix) + (1 if suffix else 0)
-    avail      = MAX_GENERIC_DESC_LEN - fixed_len
-    style_cut  = style[:max(0, avail)]
-    if len(style_cut) < len(style) and style[len(style_cut)] != " ":
-        head, sep, _ = style_cut.rpartition(" ")
-        style_cut = head if sep else style_cut
-    style_trim = style_cut.rstrip()
-    return " ".join(p for p in (prefix, style_trim, suffix) if p)[:MAX_GENERIC_DESC_LEN]
+    words = style.split()
+    while words and _generic_desc_digits(
+        " ".join(p for p in (prefix, " ".join(words), suffix) if p)
+    ) > MAX_GENERIC_DESC_LEN:
+        words.pop()
+    style_trim = " ".join(words)
+    if not words:
+        budget = max(
+            0, MAX_GENERIC_DESC_LEN - _generic_desc_digits(prefix) - _generic_desc_digits(suffix)
+        )
+        style_trim = re.sub(r"\s+", "", style)[:budget]
+    return " ".join(p for p in (prefix, style_trim, suffix) if p)
 
 
 def map_sku(row: pd.Series, brand_code: str = "NEW") -> dict:

@@ -158,10 +158,12 @@ COLUMNS READ BUT *NOT* MAPPED TO STIBO
     AT_VariantDescription — BM rows 22-26 "Formula in System" ("Type C"),
                       computed downstream from the BY SAP colour/size
                       response; never guessed here. AT_GenericDescription
-                      IS emitted (Issue #21, 02-10-2026): MAA Generic
-                      Description Mapping, max 40 chars — brand(3) +
-                      Principal style + (Age/Gender) + Color — an exact
-                      replica of the sample modules' implementation.
+                      IS emitted (Issue #21, 02-10-2026; cap re-measured on
+                      TOTAL length incl. spaces 14-10-2026, Issue #23):
+                      MAA Generic Description Mapping, max 40 chars —
+                      brand(3) + Principal style + (Age/Gender) + Color —
+                      an exact replica of the sample modules'
+                      implementation.
 
 ────────────────────────────────────────────────────────────────────
 DEVIATIONS (documented, deliberate)
@@ -534,16 +536,13 @@ def _silhouette_lov_id(value: str) -> tuple[str, str]:
     return hit if hit else ("", "")
 
 # ── Issue #19 (02-10-2026): AT_Style LOV — COE export 02-10-2026 ─────────────
-# Single-column LOV (STEP Domains-style: one "Value" column, no ID column —
-# confirmed on the live workbench 07-10-2026). Such LOVs must be written as
-# PLAIN TEXT with no ID attribute: sending the value as an ID makes STIBO
-# silently discard it — the exact lesson by_inbound.py records for the
-# Franchise LOV ("Sending it as an id made STIBO discard it silently —
-# UAT 2026-09-22"). Accessories-only: apparel Detailed Silhouettes (e.g.
-# "Shorts") have no entry and are warned + omitted until the STEP LOV is
-# extended. The MDD "Style LOV" sheet mirrors this list (with trailing-space
-# quirks like "Bucket " / "Tote ") and stays the primary source; this export
-# is the fallback when the runtime MDD sheet misses.
+# Single-column LOV: no ID column, so the VALUE IS THE ID (same convention
+# as the Franchise LOV — by_inbound.py). Emitted as <Value ID="x">x</Value>.
+# Accessories-only: apparel Detailed Silhouettes (e.g. "Shorts") have no
+# entry and are warned + omitted until the STEP LOV is extended. The MDD
+# "Style LOV" sheet mirrors this list (with trailing-space quirks like
+# "Bucket " / "Tote ") and stays the primary source; this export is the
+# fallback when the runtime MDD sheet misses.
 LOV_STYLE_VALUES: tuple[str, ...] = (
     "Arm Sleeves", "Backpack", "Badminton Racquette", "Baguette",
     "Baseball Cap", "Basket Balls", "Beanie", "Belt",
@@ -575,8 +574,7 @@ _STYLE_NORM_INDEX: dict[str, str] = {
 
 def _style_lov_value(value: str) -> str:
     """Resolve a Detailed Silhouette source value against the COE Style LOV.
-    Returns the canonical value ('' when unmatched) — written as plain text
-    (Domains-style LOV: no ID column, no ID attribute on the Value)."""
+    Returns the canonical value ('' when unmatched) — value IS the ID."""
     raw = (value or "").strip()
     if not raw:
         return ""
@@ -1211,6 +1209,12 @@ def _line_plan_to_age(line_plan: str) -> tuple[str, str, str, str, str]:
     BM rows 37/95: SAP Age / BY Age "Mapping from column 'Line Plan
     Bussiness'" — Kids rows → Children / Kids, everything else →
     Adults / Adult. Returns (sap_id, sap_val, by_age, by_age_id, note).
+
+    AT_BYAge is an identity LOV (value = ID — COE "BY Age" LOV: ADULT /
+    ALL AGES / GRADE SCHOOL / INFANT / KIDS / PRESCHOOL, Issue #25,
+    14-10-2026); this flow only ever yields Adult/Kids per the BM rule,
+    which map to ADULT/KIDS. The finer age grades come from the footwear
+    Item Number 1st letter (inline_gtm_footwear_main.BY_AGE_LOV_ID).
     """
     raw = _s(line_plan).upper().strip()
     if not raw:
@@ -1298,19 +1302,17 @@ def _build_generic_code(brand_code: str, item_number: str) -> str:
     return f"{brand}{base}"
 
 
-# ── Generic Description (Issue #21, 02-10-2026; cap corrected #23, 07-10) ───
+# ── Generic Description (Issue #21, 02-10-2026; cap corrected #23) ──────────
 # MAA Generic Description Mapping, "Max 40 Digits": 3-digit brand code +
-# Principal style + (Age/Gender) + Color. The 07-10-2026 UAT retest showed
-# the cap counts characters EXCLUDING spaces (COE expected
-# "NEW A - Athletics Script Crew Socks 2 (A/U) WHT" — 47 chars with spaces,
-# 38 without — to PASS), so _generic_desc_digits() is the measuring stick.
+# Principal style + (Age/Gender) + Color. The MDD calculated-attribute spec
+# caps the WHOLE string — "If total length is greater than 40 chars,
+# truncate 'Description' until <=40 chars" — spaces included. The 07-10-
+# 2026 retest had switched the measure to non-space characters; the 14-10-
+# 2026 UAT disproved that (41/48-char values were flagged "Panjang kalimat
+# lebih dari 40 Digits", and every emitted 41-56-char value failed to
+# populate: "Masih belum terpopulated"), so plain len() is the measuring
+# stick again — identical to the sample modules.
 MAX_GENERIC_DESC_LEN = 40
-
-
-def _generic_desc_digits(s: str) -> int:
-    """Generic Description length in "digits" — every character except
-    whitespace (Issue #23, 07-10-2026)."""
-    return len(re.sub(r"\s+", "", s or ""))
 
 # Age / gender labels follow the STEP Generic Description derive
 # ("mapping awal"): IF SAPAge = 'CH' → 'K', 'AD' → 'A', 'AA' → 'O';
@@ -1355,23 +1357,25 @@ def _build_generic_description(
     age_code: str, gender_code: str, sap_color_name: str,
 ) -> str:
     """
-    MAA Generic Description Mapping — max 40 DIGITS ("Max 40 Digits" — the
-    cap counts characters EXCLUDING spaces, Issue #23, 07-10-2026):
-    3-digit brand code + Principal style + (Age/Gender) + Color.
+    MAA Generic Description Mapping — max 40 characters TOTAL, spaces
+    included ("If total length is greater than 40 chars, truncate
+    'Description' until <=40 chars" — MDD calculated-attribute spec;
+    Issue #23, 14-10-2026): 3-digit brand code + Principal style +
+    (Age/Gender) + Color.
 
-    Replica of inline_sample_apparel_main._build_generic_description
-    (originally), with the 07-10-2026 cap correction:
+    Verbatim replica of inline_sample_apparel_main._build_generic_description:
     - Age / gender labels follow the STEP derive ("mapping awal"):
       GENERIC_DESC_AGE_LABEL CH→K, AD→A, AA→O and gender F→W.
     - Color uses the AT_TechSAPColorDesc LOV id via _tech_sap_color_id
       (e.g. NO COLOR → NOO, RED → RED); unmapped names fall back to the
       raw text uppercased.
-    When the value exceeds 40 non-space characters the Principal style is
-    trimmed on whole-word boundaries from the END, e.g. (UAT issue #23):
-      "NEW A - Athletics Script Crew Socks 2 Pack (A/U) WHT"  (42 digits)
-      → "NEW A - Athletics Script Crew Socks 2 (A/U) WHT"      (38 digits)
-    A single-token style that still exceeds the budget falls back to a
-    hard cut on the non-space budget so the cap is never exceeded.
+    When the value exceeds 40 characters the Principal style is cut to the
+    remaining budget and backed off to a whole-word boundary — never a
+    partial word (UAT issue #23, 14-10-2026, 48 chars):
+      "NEW Trail Windproof Packable Jacket (A/M) ANGORA"
+      → "NEW Trail Windproof (A/M) ANGORA"
+    A window with no complete word (single-token style) falls back to the
+    hard cut on the final join so the cap is never exceeded.
     """
     age_label_desc = GENERIC_DESC_AGE_LABEL.get(age_code, age_code)
     gender_label   = GENERIC_DESC_GENDER_LABEL.get(gender_code, gender_code)
@@ -1381,20 +1385,16 @@ def _build_generic_description(
     suffix = " ".join(p for p in (age_gender, color_desc) if p)
     style  = (style_desc or "").strip()
     result = " ".join(p for p in (prefix, style, suffix) if p)
-    if _generic_desc_digits(result) <= MAX_GENERIC_DESC_LEN:
+    if len(result) <= MAX_GENERIC_DESC_LEN:
         return result
-    words = style.split()
-    while words and _generic_desc_digits(
-        " ".join(p for p in (prefix, " ".join(words), suffix) if p)
-    ) > MAX_GENERIC_DESC_LEN:
-        words.pop()
-    style_trim = " ".join(words)
-    if not words:
-        budget = max(
-            0, MAX_GENERIC_DESC_LEN - _generic_desc_digits(prefix) - _generic_desc_digits(suffix)
-        )
-        style_trim = re.sub(r"\s+", "", style)[:budget]
-    return " ".join(p for p in (prefix, style_trim, suffix) if p)
+    fixed_len  = len(prefix) + (1 if prefix else 0) + len(suffix) + (1 if suffix else 0)
+    avail      = MAX_GENERIC_DESC_LEN - fixed_len
+    style_cut  = style[:max(0, avail)]
+    if len(style_cut) < len(style) and style[len(style_cut)] != " ":
+        head, sep, _ = style_cut.rpartition(" ")
+        style_cut = head if sep else style_cut
+    style_trim = style_cut.rstrip()
+    return " ".join(p for p in (prefix, style_trim, suffix) if p)[:MAX_GENERIC_DESC_LEN]
 
 
 def map_sku(row: pd.Series, brand_code: str = "NEW") -> dict:
@@ -1807,25 +1807,23 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
 
     # ── Detailed Silhouette → AT_Style (LOV value match, runtime) ──
     # Issue #19 (02-10/07-10-2026): the strict membership test missed valid
-    # values — the MDD "Style LOV" carries keys with trailing spaces
-    # ("Bucket ", "Tote ") — leaving AT_Style blank in UAT. 07-10-2026:
-    # _style_close_value() adds the COE-confirmed close values (Duffel→
-    # Duffel Bags, Visor→Visors, Waistpack→Waist Bag, Sling→Sling Bag,
-    # Cap→Baseball Cap, and the sock-cut family "{Lifestyle|Performance}
-    # {No Show|Low Cut|Mid Cut} Socks" keyed on Silhouette="Socks" + Line
-    # Plan Business). The resolved value is written as PLAIN TEXT — no ID
-    # attribute: the live Style LOV is a Domains-style single-column list
-    # (no ID column), and an ID-based value is silently discarded by STIBO
-    # (same lesson as the Franchise LOV, by_inbound.py UAT 2026-09-22).
-    # A miss is warned, never guessed (raw text outside the LOV is also
-    # discarded by STIBO).
+    # values — the MDD "Style LOV" (single-column, value = ID) carries keys
+    # with trailing spaces ("Bucket ", "Tote ") — leaving AT_Style blank in
+    # UAT. 07-10-2026: _style_close_value() adds the COE-confirmed close
+    # values (Duffel→Duffel Bags, Visor→Visors, Waistpack→Waist Bag,
+    # Sling→Sling Bag, Cap→Baseball Cap, and the sock-cut family
+    # "{Lifestyle|Performance} {No Show|Low Cut|Mid Cut} Socks" keyed on
+    # Silhouette="Socks" + Line Plan Business). The CANONICAL value is
+    # emitted as <Value ID="x">x</Value> (the value IS the ID — no ID
+    # column in the LOV). A miss is warned, never guessed (raw text on a
+    # LOV attribute is discarded by STIBO).
     if art.get("detailed_silhouette"):
         style_canonical = _style_close_value(
             mdd, art["detailed_silhouette"],
             art.get("silhouette", ""), art.get("line_plan_biz", ""),
         )
         if style_canonical:
-            _val(vals_el, "AT_Style", style_canonical)
+            _val(vals_el, "AT_Style", style_canonical, id_val=style_canonical)
         else:
             log.warning(
                 "Detailed Silhouette '%s' not in the Style LOV — "

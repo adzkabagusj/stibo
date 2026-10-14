@@ -61,7 +61,9 @@ COLUMN → ATTRIBUTE MAP (v2.0 — every column of the 260722 GTM sheet)
       → AT_Gender      (SAP Gender LOV: M/F/U)            [BM row 38]
       → AT_SAPAge      (SAP Age LOV: AD/CH)               [BM row 37]
       → AT_BYGender    (Male / Female / Unisex)           [BM row 96]
-      → AT_BYAge       (Adult / Kids / Grade School / …)  [BM row 95]
+      → AT_BYAge       (Adult / Kids / Grade School / …; COE identity LOV —
+                       value = ID: GRADE SCHOOL / PRESCHOOL / INFANT /
+                       KIDS / ADULT — Issue #25, 14-10-2026)  [BM row 95]
       → AT_EComAgesCategory (A/G/P/I/Y)                   [BM row 132]
       → AT_Fastening   (see _closure_to_fastening)         [BM row 104]
 
@@ -132,10 +134,14 @@ COLUMNS READ BUT *NOT* MAPPED TO STIBO
   not to send it"; v2.0 keeps them out and cites the spec's "Formula in
   System" typing instead).
   AT_GenericDescription IS emitted (Issue #21, 02-10-2026; cap corrected
-  #23, 07-10-2026): MAA Generic Description Mapping, max 40 digits (non-
-  space chars) — brand(3) + Principal style + (Age/Gender) + Color (age
-  CH→K / AD→A / AA→O, gender F→W, colour via the AT_TechSAPColorDesc LOV
-  with raw-uppercase fallback).
+  #23, 07-10-2026 and re-corrected 14-10-2026): MAA Generic Description
+  Mapping, max 40 characters TOTAL, spaces included — the MDD calculated-
+  attribute spec reads "If total length is greater than 40 chars, truncate
+  'Description' until <=40 chars". The 07-10 excluding-spaces reading let
+  41-56-char values through and STIBO dropped every one of them (UAT
+  14-10-2026: "Masih belum terpopulated"). brand(3) + Principal style +
+  (Age/Gender) + Color (age CH→K / AD→A / AA→O, gender F→W, colour via
+  the AT_TechSAPColorDesc LOV with raw-uppercase fallback).
 
 ────────────────────────────────────────────────────────────────────
 DEVIATIONS (documented, deliberate)
@@ -293,11 +299,20 @@ LOV_GENDER = {"Male": "M", "Female": "F", "Unisex": "U"}
 # MDD "Age LOV" — SAP Age (value → ID)
 LOV_SAP_AGE = {"Adults": "AD", "Children": "CH", "All Ages": "AA"}
 
-# BY-side LOV IDs are the upper-cased BY values (MDD "Age LOV" col F/G and
-# "Gender LOV" col G — same convention as new_balance/inline_main_accessories)
-LOV_BY_AGE = {
-    "AD": "ADULT", "CH": "KIDS", "AA": "ALL AGES",
-    "IN": "INFANT", "JR": "KIDS",
+# ── Issue #25 (14-10-2026): AT_BYAge — COE "BY Age" LOV, value = ID ──────────
+# Adult→ADULT, All Ages→ALL AGES, Grade School→GRADE SCHOOL, Infant→INFANT,
+# Kids→KIDS, Preschool→PRESCHOOL. Resolved from the ITEM_PREFIX_PROFILE
+# "by_age" value, NOT from the SAP age id: the previous age_id-keyed table
+# (AD→ADULT, CH→KIDS, …) collapsed every children profile to KIDS, so G/P/I
+# item numbers carried the wrong LOV ID and STIBO dropped AT_BYAge
+# ("For FTW with 1st digits Number: P, I, G still fail" — UAT 14-10-2026).
+BY_AGE_LOV_ID: dict[str, str] = {
+    "Adult":        "ADULT",
+    "All Ages":     "ALL AGES",
+    "Grade School": "GRADE SCHOOL",
+    "Infant":       "INFANT",
+    "Kids":         "KIDS",
+    "Preschool":    "PRESCHOOL",
 }
 
 # MDD "Season LOV" — code → season name
@@ -994,19 +1009,17 @@ def _build_generic_code(brand_code: str, item_number: str) -> str:
     return f"{brand}{base}"
 
 
-# ── Generic Description (Issue #21, 02-10-2026; cap corrected #23, 07-10) ───
+# ── Generic Description (Issue #21, 02-10-2026; cap corrected #23) ──────────
 # MAA Generic Description Mapping, "Max 40 Digits": 3-digit brand code +
-# Principal style + (Age/Gender) + Color. The 07-10-2026 UAT retest showed
-# the cap counts characters EXCLUDING spaces (COE expected
-# "NEW A - Athletics Script Crew Socks 2 (A/U) WHT" — 47 chars with spaces,
-# 38 without — to PASS), so _generic_desc_digits() is the measuring stick.
+# Principal style + (Age/Gender) + Color. The MDD calculated-attribute spec
+# caps the WHOLE string — "If total length is greater than 40 chars,
+# truncate 'Description' until <=40 chars" — spaces included. The 07-10-
+# 2026 retest had switched the measure to non-space characters; the 14-10-
+# 2026 UAT disproved that (41/48-char values were flagged "Panjang kalimat
+# lebih dari 40 Digits", and every emitted 41-56-char value failed to
+# populate: "Masih belum terpopulated"), so plain len() is the measuring
+# stick again — identical to the sample modules.
 MAX_GENERIC_DESC_LEN = 40
-
-
-def _generic_desc_digits(s: str) -> int:
-    """Generic Description length in "digits" — every character except
-    whitespace (Issue #23, 07-10-2026)."""
-    return len(re.sub(r"\s+", "", s or ""))
 
 # Age / gender labels follow the STEP Generic Description derive
 # ("mapping awal"): IF SAPAge = 'CH' → 'K', 'AD' → 'A', 'AA' → 'O';
@@ -1044,24 +1057,26 @@ def _build_generic_description(
     age_code: str, gender_code: str, sap_color_name: str,
 ) -> str:
     """
-    MAA Generic Description Mapping — max 40 DIGITS ("Max 40 Digits" — the
-    cap counts characters EXCLUDING spaces, Issue #23, 07-10-2026):
-    3-digit brand code + Principal style + (Age/Gender) + Color.
+    MAA Generic Description Mapping — max 40 characters TOTAL, spaces
+    included ("If total length is greater than 40 chars, truncate
+    'Description' until <=40 chars" — MDD calculated-attribute spec;
+    Issue #23, 14-10-2026): 3-digit brand code + Principal style +
+    (Age/Gender) + Color.
 
-    Replica of inline_sample_apparel_main._build_generic_description
-    (originally), with the 07-10-2026 cap correction:
+    Verbatim replica of inline_sample_apparel_main._build_generic_description:
     - Age / gender labels follow the STEP derive ("mapping awal"):
       GENERIC_DESC_AGE_LABEL CH→K, AD→A, AA→O and gender F→W.
     - Color uses the AT_TechSAPColorDesc LOV id via _tech_sap_color_id
       (e.g. NO COLOR → NOO, RED → RED); unmapped names fall back to the
       raw text uppercased (a GTM colourway like "RICH OAK / CASTLEROCK"
       is not a SAP family name and takes the fallback).
-    When the value exceeds 40 non-space characters the Principal style is
-    trimmed on whole-word boundaries from the END, e.g. (UAT issue #23):
-      "NEW A - Athletics Script Crew Socks 2 Pack (A/U) WHT"  (42 digits)
-      → "NEW A - Athletics Script Crew Socks 2 (A/U) WHT"      (38 digits)
-    A single-token style that still exceeds the budget falls back to a
-    hard cut on the non-space budget so the cap is never exceeded.
+    When the value exceeds 40 characters the Principal style is cut to the
+    remaining budget and backed off to a whole-word boundary — never a
+    partial word (UAT issue #23, 14-10-2026, 48 chars):
+      "NEW Trail Windproof Packable Jacket (A/M) ANGORA"
+      → "NEW Trail Windproof (A/M) ANGORA"
+    A window with no complete word (single-token style) falls back to the
+    hard cut on the final join so the cap is never exceeded.
     """
     age_label_desc = GENERIC_DESC_AGE_LABEL.get(age_code, age_code)
     gender_label   = GENERIC_DESC_GENDER_LABEL.get(gender_code, gender_code)
@@ -1071,20 +1086,16 @@ def _build_generic_description(
     suffix = " ".join(p for p in (age_gender, color_desc) if p)
     style  = (style_desc or "").strip()
     result = " ".join(p for p in (prefix, style, suffix) if p)
-    if _generic_desc_digits(result) <= MAX_GENERIC_DESC_LEN:
+    if len(result) <= MAX_GENERIC_DESC_LEN:
         return result
-    words = style.split()
-    while words and _generic_desc_digits(
-        " ".join(p for p in (prefix, " ".join(words), suffix) if p)
-    ) > MAX_GENERIC_DESC_LEN:
-        words.pop()
-    style_trim = " ".join(words)
-    if not words:
-        budget = max(
-            0, MAX_GENERIC_DESC_LEN - _generic_desc_digits(prefix) - _generic_desc_digits(suffix)
-        )
-        style_trim = re.sub(r"\s+", "", style)[:budget]
-    return " ".join(p for p in (prefix, style_trim, suffix) if p)
+    fixed_len  = len(prefix) + (1 if prefix else 0) + len(suffix) + (1 if suffix else 0)
+    avail      = MAX_GENERIC_DESC_LEN - fixed_len
+    style_cut  = style[:max(0, avail)]
+    if len(style_cut) < len(style) and style[len(style_cut)] != " ":
+        head, sep, _ = style_cut.rpartition(" ")
+        style_cut = head if sep else style_cut
+    style_trim = style_cut.rstrip()
+    return " ".join(p for p in (prefix, style_trim, suffix) if p)[:MAX_GENERIC_DESC_LEN]
 
 
 def map_sku(row: pd.Series, brand_code: str = "NEW") -> dict:
@@ -1132,7 +1143,7 @@ def map_sku(row: pd.Series, brand_code: str = "NEW") -> dict:
         "age_val":         profile["age_val"],
         "by_gender":       profile["by_gender"],
         "by_age":          profile["by_age"],
-        "by_age_id":       LOV_BY_AGE.get(profile["age_id"], profile["by_age"].upper()),
+        "by_age_id":       BY_AGE_LOV_ID.get(profile["by_age"], profile["by_age"].upper()),
         "ecom_age":        profile["ecom_age"],
         "ecom_age_id":     LOV_ECOM_AGES.get(profile["ecom_age"], ""),
         # ── derived (mapping tables) ─────────────────────────────

@@ -1,0 +1,11 @@
+2026-10-15 14:56:20,534  INFO      [AppAccPreline] Loading: (uat) S227 APP ACC Preline Linelist - SEA.xlsm
+2026-10-15 14:56:20,554  INFO      [AppAccPreline] Using sheet: 'APPACC' (mode=first_visible)
+2026-10-15 14:56:20,565  INFO      [AppAccPreline] Header at row index 3 (row 4)
+2026-10-15 14:56:20,575  INFO      [AppAccPreline] 5 SKU rows loaded from 'APPACC'
+2026-10-15 14:56:20,579  WARNING   Brand Category unresolved for country=ID sbu=AP — AT_BrandCategory omitted
+2026-10-15 14:56:20,582  WARNING   Brand Category unresolved for country=ID sbu=AP — AT_BrandCategory omitted
+2026-10-15 14:56:20,584  WARNING   Brand Category unresolved for country=ID sbu=AP — AT_BrandCategory omitted
+2026-10-15 14:56:20,585  WARNING   Silhouette 'Tee' not in MDD or COE LOV — AT_Silhouette omitted
+2026-10-15 14:56:20,586  WARNING   Brand Category unresolved for country=ID sbu=AP — AT_BrandCategory omitted
+2026-10-15 14:56:20,587  WARNING   Silhouette 'Tee' not in MDD or COE LOV — AT_Silhouette omitted
+2026-10-15 14:56:20,587  WARNING   Brand Category unresolved for country=ID sbu=AP — AT_BrandCategory omitted

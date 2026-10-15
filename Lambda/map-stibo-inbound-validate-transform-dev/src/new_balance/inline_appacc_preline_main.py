@@ -50,29 +50,44 @@ COLUMN → ATTRIBUTE MAP (v2.0 — every column of the S2'27 Preline sheet)
                                  — Kids rows → Children/Kids, else Adults]
     Product Line              → AT_PrincipalMerchandiseHierarchyL1 [BM row 78]
     Silhouette                → AT_PrincipalMerchandiseHierarchyL3 [BM row 80]
-                               → AT_Silhouette (LOV — ID resolved from the
-                                 MDD "Silhouette LOV" at runtime, with the
-                                 COE+MDD fallback table (IDs 01-78) —
-                                 Issues #18 30-09/07-10-2026)  [BM row 101]
+                               → AT_Silhouette (APPAREL ONLY — official
+                                 principal close map first: Jacket→
+                                 Jackets, S/S Top→T-Shirt (Short Sleeves),
+                                 Pant→Pants, Tight→Tights (Full Length),
+                                 Vest/Tanks→Sleeveless / Vest, … — then
+                                 the MDD "Silhouette LOV" / COE fallback
+                                 IDs 01-78)              [BM row 101]
     GBU                       → AT_PrincipalMerchandiseHierarchyL4 [BM row 81]
     Detailed Silhouette       → AT_PrincipalMerchandiseHierarchyL5 [BM row 82]
-                               → AT_Style (single-column LOV — normalized
-                                 match against the MDD "Style LOV" values
-                                 at runtime, plus the COE-confirmed close
-                                 values: Duffel→Duffel Bags, Visor→Visors,
-                                 Waistpack→Waist Bag, Cap→Baseball Cap,
-                                 sock-cut family — Issue #19, 07-10-2026)
+                               → AT_Style (ACCESSORIES ONLY — single-column
+                                 LOV; official principal close map:
+                                 Cap→Snapback Cap, Neck Tube/Scarf→Head
+                                 Band, Grip→Gloves, Sackpack→Gym Sack,
+                                 Hydration Bag→Water Bottles, Crossbody→
+                                 Sling Bag, sock family Crew→Performance
+                                 High Cut Socks / Quarter→Performance Mid
+                                 Cut Socks / No Show·Liner·Low Cut→
+                                 Performance No Show Socks — Issue #19)
                                                                   [BM row 110]
-    Price Segment             → AT_BCI                          [BM row 97]
-    Product Fit               → AT_Fit (LOV close value)        [BM row 109]
+    Price Segment             → AT_BCI (official principal map: Best→Best,
+                                 Better→Image, Good/Value→Commercial)
+                                                                  [BM row 97]
+    Product Fit               → AT_Fit (APPAREL ONLY — official principal
+                                 map: Standard/N-A→Regular, Slim/Fitted→
+                                 Fitted, Relaxed/Oversized→Loose)
+                                                                  [BM row 109]
     Target Principal Material → AT_Content / AT_Fabric / AT_Material (LOV
                                  close values)                   [BM rows 106/107/111]
-                                 Division scoping (Issues #20/#21/#22,
-                                 02-10/07-10-2026): Content = APP only
-                                 ("tidak ada BY Content untuk Acc"),
-                                 Fabric = APP+ACC via the 43-value COE LOV
-                                 (same list as Material), Material = ACC
-                                 only (empty for Apparel)
+                                 Official principal workbook (Mapping_
+                                 Apparel.xlsx, 14-10-2026) — division
+                                 scoping: Content = APPAREL ONLY,
+                                 Fabric = APPAREL ONLY (Polywoven/Poly
+                                 Knit/Polyester/Nylon/Synthetic/Wool→
+                                 Interlock, Cotton→Jersey, Cotton
+                                 Fleece→Fleece, Cotton Twill→Twill),
+                                 Material = ACCESSORIES ONLY (Acrylic→
+                                 Plastic, Wool/Mesh→Blend, else the
+                                 default MDD Material LOV close value)
     Country Of Origin         → AT_CountryOrigin                [BM row 41]
                                  ("VNM - Viet Nam" → VNM → VN/Vietnam)
     Technologies              → AT_TechnologyUsed               [BM row 158]
@@ -189,10 +204,11 @@ DEVIATIONS (documented, deliberate)
     receive the raw column values. Silhouette additionally falls back to
     the COE 60-value LOV export when the MDD sheet misses (Issue #18,
     30-09-2026).
- 5. AT_BCI carries the Price Segment text (BM row 97). The MDD declares
-    LOV "BCI" but ships no BCI LOV sheet, so the ID resolves to "" — the
-    text is emitted exactly like lotto/recap_main.py does (display value,
-    best-effort ID).
+ 5. AT_BCI maps the Price Segment through the official principal close map
+    (Best→Best, Better→Image, Good/Value→Commercial — Mapping_Apparel.xlsx,
+    BY BCI). The MDD declares LOV "BCI" but ships no BCI LOV sheet, so the
+    ID resolves to "" — the mapped text is emitted exactly like
+    lotto/recap_main.py does (display value, best-effort ID).
  6. FOB (Estimated GEP) is emitted for non-zero values only; the 27 zero /
     blank rows are omitted and reported (a FOB of 0 would price the
     article wrongly).
@@ -280,9 +296,12 @@ SOURCE_COLUMNS: dict[str, list[str]] = {
                                     "AT_Style", "AT_Collection1 (component)"],
     "Price Segment":               ["AT_BCI"],
     "Product Fit":                 ["AT_Fit"],
-    "Target Principal Material":   ["AT_Content (APP only — Issue #22)",
-                                    "AT_Fabric (43-value LOV — Issue #21)",
-                                    "AT_Material (ACC only — Issue #20)"],
+    "Target Principal Material":   ["AT_Content (APPAREL only — official "
+                                    "workbook AD3 / Issue #22)",
+                                    "AT_Fabric (APPAREL only — live 14-value "
+                                    "Fabric LOV + official principal map)",
+                                    "AT_Material (ACCESSORIES only — "
+                                    "official workbook AR3 / Issue #20)"],
     "Country Of Origin":           ["AT_CountryOrigin"],
     "Technologies":                ["AT_TechnologyUsed"],
     "Product Collection":          ["AT_Collection2"],
@@ -535,6 +554,28 @@ def _silhouette_lov_id(value: str) -> tuple[str, str]:
     hit = _SILHOUETTE_NORM_INDEX.get(re.sub(r"[^A-Z0-9]", "", raw.upper()))
     return hit if hit else ("", "")
 
+# ── AT_Silhouette close values — official NB principal mapping ───────────────
+# Mapping_Apparel.xlsx (BY Silhouette — APPAREL ONLY): the NB sheet's
+# Silhouette values map to the canonical live-LOV names before resolution
+# ("Jacket" → "Jackets" ID 16, "S/S Top" → "T-Shirt (Short Sleeves)" ID 51,
+# …). Every entry below resolves in LOV_SILHOUETTE_ID; Silhouette values
+# not listed here keep the direct MDD/COE resolution.
+SILHOUETTE_CLOSE_MAP: dict[str, str] = {
+    "S/S Top":                "T-Shirt (Short Sleeves)",
+    "Pant":                   "Pants",
+    "Short":                  "Shorts",
+    "Tight":                  "Tights (Full Length)",
+    "Hoodies & Sweatshirts":  "Pull Over Hoodies",
+    "L/S Top":                "T-Shirt (Long Sleeves)",
+    "Jacket":                 "Jackets",
+    "Skirt":                  "Skirt",
+    "Tanks/Sleeveless/Singlet": "Sleeveless / Vest",
+    "Dress":                  "Dress",
+    "Sports Bra":             "Bra Top",
+    "Outerwear":              "Jackets",
+    "Vest":                   "Sleeveless / Vest",
+}
+
 # ── Issue #19 (02-10-2026): AT_Style LOV — COE export 02-10-2026 ─────────────
 # Single-column LOV: no ID column, so the VALUE IS THE ID (same convention
 # as the Franchise LOV — by_inbound.py). Emitted as <Value ID="x">x</Value>.
@@ -588,28 +629,37 @@ def _style_lov_value(value: str) -> str:
 # rule stays "Mapping from Detailed Silhouette" — resolved here through
 # close values (BM row 110: "system to generate close value", the same
 # philosophy the spec pins for Material -Upper).
-# Tier 1 — name-form variants / closest values of live Style LOV entries:
+# Tier 1 — official NB principal mapping (Mapping_Apparel.xlsx, BY Style —
+# ACCESSORIES ONLY), plus the legacy close aliases it confirms. Every target
+# is a live Style LOV value ("Gloves", "Head Band", "Snapback Cap", …):
 STYLE_CLOSE_ALIAS: dict[str, str] = {
-    "Duffel":     "Duffel Bags",   # LOV carries the compound "Duffel Bags"
-    "Duffle":     "Duffel Bags",
-    "Visor":      "Visors",        # LOV carries the plural
-    "Waistpack":  "Waist Bag",     # LOV: "Waist Bag" (two words)
-    "Sling":      "Sling Bag",     # LOV: "Sling Bag"
-    "Crossbody":  "Sling Bag",     # crossbody ≈ sling bag (worn across body)
-    "Grip":       "Grips",         # LOV carries the plural
-    "Sackpack":   "Gym Sack",      # NB "Sackpack" = drawstring gym sack
-    "Cap":        "Baseball Cap",  # generic cap → the LOV's generic cap value
+    "Neck Tube":    "Head Band",          # official map (AN7/AO7)
+    "Scarf":        "Head Band",          # official map (AN10/AO10)
+    "Cap":          "Snapback Cap",       # official map (AN8/AO8)
+    "Visor":        "Visors",             # official map (AN9/AO9)
+    "Backpack":     "Backpack",           # official map — direct LOV hit
+    "Tote":         "Tote",               # official map — MDD key "Tote "
+    "Crossbody":    "Sling Bag",          # official map (AN13/AO13)
+    "Duffle":       "Duffel Bags",        # official map (AN14/AO14)
+    "Duffel":       "Duffel Bags",
+    "Sackpack":     "Gym Sack",           # official map (AN15/AO15)
+    "Hydration Bag": "Water Bottles",     # official map (AN16/AO16)
+    "Grip":         "Gloves",             # official map (AN17/AO17)
+    "Waistpack":    "Waist Bag",          # official map (AN18/AO18)
+    "Sling":        "Sling Bag",
 }
-# Tier 2 — sock-cut family (Silhouette == "Socks"). The LOV spells sock
-# styles "{Lifestyle|Performance} {No Show|Low Cut|Mid Cut} Socks"; the
-# family is picked from Line Plan Business (performance lines → Performance).
-STYLE_SOCK_CUT_TO_LOV_CUT: dict[str, str] = {
-    "No Show": "No Show",   # exact cut name in the LOV
-    "Low Cut": "Low Cut",   # exact cut name in the LOV
-    "Quarter": "Mid Cut",   # quarter = just above the ankle → mid cut
-    "Crew":    "Mid Cut",   # crew = classic everyday length → mid cut
+# Tier 2 — sock-cut family (official map AN19-AO23; Silhouette == "Socks").
+# The principal maps every cut explicitly to the PERFORMANCE family — the
+# previous Line-Plan-Business heuristic (Lifestyle vs Performance) is gone:
+#   Crew → Performance High Cut Socks, Quarter → Performance Mid Cut Socks,
+#   No Show / Liner / Low Cut → Performance No Show Socks.
+STYLE_SOCK_CUT_TO_LOV: dict[str, str] = {
+    "Crew":    "Performance High Cut Socks",
+    "Quarter": "Performance Mid Cut Socks",
+    "No Show": "Performance No Show Socks",
+    "Liner":   "Performance No Show Socks",
+    "Low Cut": "Performance No Show Socks",
 }
-STYLE_PERFORMANCE_LPB: set[str] = {"RUNNING", "TRAINING", "KIDS PERFORMANCE"}
 
 
 def _style_close_value(
@@ -617,10 +667,13 @@ def _style_close_value(
     silhouette: str, line_plan_biz: str,
 ) -> str:
     """
-    Issue #19 (07-10-2026): full Detailed Silhouette → AT_Style resolution.
-    Precedence: MDD "Style LOV" (normalized) → COE 80-value export
-    (normalized) → close-value aliases above. Returns the canonical LOV
-    value ('' when unmatched — caller warns, never guesses raw text).
+    Issue #19 (07-10-2026; aligned to the official principal mapping
+    14-10-2026): full Detailed Silhouette → AT_Style resolution.
+    Precedence: MDD "Style LOV" (normalized) → COE export (normalized) →
+    official close-value map above → sock-cut family. Returns the canonical
+    LOV value ('' when unmatched — caller warns, never guesses raw text).
+    (line_plan_biz is kept in the signature for compatibility; the official
+    mapping no longer keys the sock family on it.)
     """
     raw = _s(detailed_silhouette)
     if not raw:
@@ -632,16 +685,9 @@ def _style_close_value(
     if alias and _style_lov_value(alias):
         return _style_lov_value(alias)
     if _s(silhouette).upper().strip() == "SOCKS":
-        cut = STYLE_SOCK_CUT_TO_LOV_CUT.get(_s(raw).title())
-        if cut:
-            family = (
-                "Performance"
-                if _s(line_plan_biz).upper().strip() in STYLE_PERFORMANCE_LPB
-                else "Lifestyle"
-            )
-            cand = f"{family} {cut} Socks"
-            if _style_lov_value(cand):
-                return _style_lov_value(cand)
+        cand = STYLE_SOCK_CUT_TO_LOV.get(_s(raw).title(), "")
+        if cand and _style_lov_value(cand):
+            return cand
     return ""
 
 # ── Line Plan Business → Sports Category (BM row 121, verbatim) ─────────────
@@ -683,6 +729,17 @@ LOV_SPORTS_CATEGORY_ID: dict[str, str] = {
     "Other":                                 "16",
 }
 
+# ── Price Segment → BCI close values (BM row 97) ─────────────────────────────
+# Official NB principal mapping (Mapping_Apparel.xlsx, BY BCI — APPAREL and
+# ACCESSORIES): Best→Best, Better→Image, Good→Commercial, Value→Commercial.
+# Unlisted segments keep the raw text (previous DEVIATION 5 behaviour).
+BCI_CLOSE_MAP: dict[str, str] = {
+    "BEST":   "Best",
+    "BETTER": "Image",
+    "GOOD":   "Commercial",
+    "VALUE":  "Commercial",
+}
+
 # ── Country Of Origin: "VNM - Viet Nam" → 3-letter token → 2-letter LOV ─────
 ISO_A3_TO_A2: dict[str, str] = {
     "ARE": "AE", "ARG": "AR", "AUS": "AU", "AUT": "AT", "BEL": "BE",
@@ -706,7 +763,7 @@ LOV_COUNTRY_ORIGIN: dict[str, str] = {
     "CN": "China",     "VN": "Vietnam",  "ID": "Indonesia",
     "TH": "Thailand",  "MY": "Malaysia", "SG": "Singapore",
     "US": "USA",       "TW": "Taiwan",   "HK": "Hong Kong",
-    "LK": "Sri Lanka", "KH": "Cambodia", "PT": "Portugal",
+    "LK": "Srilanka", "KH": "Cambodia", "PT": "Portugal",
     "IN": "India",     "BD": "Bangladesh", "PK": "Pakistan",
     "IT": "Italy",     "GB": "United Kingdom", "JP": "Japan",
     "JO": "Jordan",    "AU": "Australia", "DE": "Germany",
@@ -715,20 +772,33 @@ LOV_COUNTRY_ORIGIN: dict[str, str] = {
 }
 
 # ── Product Fit → MDD "Fit LOV" close values (BM row 109) ────────────────────
-# Fit LOV: F=Fitted, R=Regular, L=Loose, C=Compression Fit.
-# "0" / "N/A" rows are skipped (source noise).
+# Fit LOV: F=Fitted, R=Regular, L=Loose, C=Compression Fit. Official NB
+# principal mapping (Mapping_Apparel.xlsx, BY Fit — APPAREL ONLY):
+# Standard→Regular, Slim→Fitted, Fitted→Fitted, Relaxed→Loose,
+# Oversized→Loose, N/A→Regular. "0" / blank stay skipped (placeholder
+# noise, not listed in the workbook).
 FIT_CLOSE_MAP: dict[str, tuple] = {
     "FITTED":    ("F", "Fitted"),
     "SLIM":      ("F", "Fitted"),
     "STANDARD":  ("R", "Regular"),
     "RELAXED":   ("L", "Loose"),
     "OVERSIZED": ("L", "Loose"),
+    "N/A":       ("R", "Regular"),
 }
 
 # ── Target Principal Material → Material / Content / Fabric LOV close values ─
 # Three attributes share one source column (BM rows 106/107/111); each is
-# emitted only when its own LOV resolves (see DEVIATION 4). AT_Material is
-# further restricted to non-Apparel divisions (Issue #20, 02-10-2026).
+# emitted only when its own LOV resolves (see DEVIATION 4). Division
+# scoping per the OFFICIAL NB principal mapping workbook ("New Balance Line
+# List Mapping_Apparel.xlsx", Mapping sheet — received 14-10-2026):
+#   AT_Content  — APPAREL ONLY (AD3; also Issue #22, closed 08-10-2026)
+#   AT_Fabric   — APPAREL ONLY (AH3)
+#   AT_Material — ACCESSORIES ONLY (AR3; the 14-10 morning lift of the 02-10
+#                 restriction is reverted — the official workbook confirms
+#                 the COE comment "Muncul polyester, seharusnya untuk
+#                 Apparel tidak terisi" meant Apparel stays EMPTY).
+# Where the workbook specifies a mapping it wins; values it does not list
+# keep the default MDD-LOV close value below.
 MATERIAL_LOV_CLOSE: dict[str, tuple] = {          # MDD "Material LOV"
     "COTTON":        ("COT", "Cotton"),
     "COTTON JERSEY": ("COT", "Cotton"),
@@ -739,14 +809,17 @@ MATERIAL_LOV_CLOSE: dict[str, tuple] = {          # MDD "Material LOV"
     "POLYWOVEN":     ("PES", "Polyester"),
     "NYLON":         ("NYL", "Nylon"),
     "NYLON WOVEN":   ("NYL", "Nylon"),
-    "WOOL":          ("WOL", "Wool"),
-    "MESH":          ("MES", "Mesh"),
+    "WOOL":          ("BLD", "Blend"),
+    "MESH":          ("BLD", "Blend"),
     "SYNTHETIC":     ("SYN", "Synthetic"),
-    "ACRYLIC":       ("ACR", "Acrylic"),
+    "ACRYLIC":       ("PLA", "Plastic"),
     "POLYURETHANE":  ("PU",  "PU"),
-    # Issue #20 (02-10-2026) — remaining COE Material LOV entries (ACC
-    # rows), value → (ID, display) exactly as the COE export spells them
-    # (incl. "Polyproplene").
+    # Official NB principal mapping (Mapping_Apparel.xlsx, BY Material —
+    # ACCESSORIES ONLY), value → (ID, display). Three entries deliberately
+    # diverge from the naive MDD "Material LOV" name match — the principal
+    # maps them to the closest commercial material: Acrylic→Plastic,
+    # Wool→Blend, Mesh→Blend. Values not listed in the workbook (Canvas,
+    # Leather, …) keep the default MDD-LOV close value.
     "BLEND":         ("BLD", "Blend"),
     "CANVAS":        ("CAN", "Canvas"),
     "CARBON FIBER":  ("CF",  "Carbon Fiber"),
@@ -795,16 +868,62 @@ CONTENT_LOV_CLOSE: dict[str, tuple] = {           # MDD "Content LOV"
     "POLYWOVEN":     ("POLYESTER", "Polyester"),
     "NYLON":         ("NYLON", "Nylon"),
     "NYLON WOVEN":   ("NYLON", "Nylon"),
+    # Official NB principal mapping (Mapping_Apparel.xlsx, BY Content —
+    # APPAREL ONLY): Synthetic→Polyester, Wool→Viscose.
+    "SYNTHETIC":     ("POLYESTER", "Polyester"),
+    "WOOL":          ("VISCOSE", "Viscose"),
 }
-# ── Issue #21 (07-10-2026): AT_Fabric LOV = the COE 43-value Material LOV ────
-# COE 07-10-2026: the live Fabric LOV is the SAME 43-value list as Material
-# (Acrylic/ACR … Wool/WOL — table provided with UAT issue #21). The old
-# Fabric close map (Jersey/JE, Fleece/FL, Twill/TW from the MDD "Fabric
-# LOV" sheet) sent IDs STIBO does not recognise, so every AT_Fabric value
-# was silently discarded in the 02-10 UAT run. Fabric now resolves through
-# the full alias table (Poly Knit/Polywoven → PES Polyester, Cotton
-# Jersey/Fleece/Twill → COT Cotton, Nylon Woven → NYL Nylon, …).
-FABRIC_LOV_CLOSE: dict[str, tuple] = dict(MATERIAL_LOV_CLOSE)
+# ── Issue #21 (aligned 14-10-2026): AT_Fabric — official NB principal map ────
+# Live Fabric LOV = the 14-value weave list (STEP Workbench 14-10-2026 ==
+# MDD "Fabric LOV" sheet): Corduroy/CO, Denim/DE, Fleece/FL, Heavy Jersey/
+# HJ, Interlock/IL, Jersey/JE, Microfiber/MF, Neoprene/NP, Pique/PI,
+# Ribstop/RS, Scuba/SC, Sustainable/SU, Terry/TE, Twill/TW. The value
+# mapping is the official principal workbook (Mapping_Apparel.xlsx, BY
+# Fabric — APPAREL ONLY), which maps EVERY apparel composition in the S227
+# file: Polywoven / Poly Knit / Polyester / Nylon Woven / Nylon / Synthetic
+# / Wool → Interlock, Cotton → Jersey, Cotton Jersey → Jersey, Cotton
+# Fleece → Fleece, Cotton Twill → Twill. (The 07-10 alias onto the
+# 43-value Material LOV sent IDs the live Fabric LOV does not carry —
+# every value was discarded, UAT: "Blank".) Bare weave names below are the
+# generic fallback for values the workbook does not list.
+FABRIC_LOV_CLOSE: dict[str, tuple] = {
+    # Official principal mapping — Target Principal Material → Fabric
+    "POLYWOVEN":     ("IL", "Interlock"),
+    "POLY KNIT":     ("IL", "Interlock"),
+    "POLYESTER":     ("IL", "Interlock"),
+    "NYLON WOVEN":   ("IL", "Interlock"),
+    "NYLON":         ("IL", "Interlock"),
+    "SYNTHETIC":     ("IL", "Interlock"),
+    "WOOL":          ("IL", "Interlock"),
+    "COTTON":        ("JE", "Jersey"),
+    "COTTON JERSEY": ("JE", "Jersey"),
+    "COTTON FLEECE": ("FL", "Fleece"),
+    "COTTON TWILL":  ("TW", "Twill"),
+    # bare weave names (live Fabric LOV, value → (ID, display))
+    "CORDUROY":     ("CO", "Corduroy"),
+    "DENIM":        ("DE", "Denim"),
+    "FLEECE":       ("FL", "Fleece"),
+    "HEAVY JERSEY": ("HJ", "Heavy Jersey"),
+    "INTERLOCK":    ("IL", "Interlock"),
+    "JERSEY":       ("JE", "Jersey"),
+    "MICROFIBER":   ("MF", "Microfiber"),
+    "NEOPRENE":     ("NP", "Neoprene"),
+    "PIQUE":        ("PI", "Pique"),
+    "RIBSTOP":      ("RS", "Ribstop"),
+    "SCUBA":        ("SC", "Scuba"),
+    "SUSTAINABLE":  ("SU", "Sustainable"),
+    "TERRY":        ("TE", "Terry"),
+    "TWILL":        ("TW", "Twill"),
+}
+
+# Weave tokens for the compound-value scan in _material_triples — single-word
+# bare keys only, longest first, so a future "Recycled Cotton Jersey" style
+# value still resolves (and "Heavy Jersey" would beat "Jersey" if it ever
+# entered the scan set).
+FABRIC_WEAVE_TOKENS: tuple[tuple[str, tuple], ...] = tuple(
+    sorted(((k, v) for k, v in FABRIC_LOV_CLOSE.items() if " " not in k),
+           key=lambda kv: len(kv[0]), reverse=True)
+)
 
 # Product Line → Division letter (for PPH parent and division code)
 DIVISION_PARENT_MAP: dict[str, str] = {
@@ -1238,6 +1357,9 @@ def _country_origin_tokens(coo_raw: str) -> tuple[str, str]:
     """
     "VNM - Viet Nam" → the leading 3-letter token (VNM) → 2-letter Country
     Origin LOV (VN/Vietnam). Returns ("", "") when unresolvable.
+    Display strings follow the official NB principal mapping
+    (Mapping_Apparel.xlsx, Country of Origin) — e.g. LKA → "Srilanka"
+    (kept verbatim so the WEB UI matches what the principal expects).
     """
     tokens = [t for t in re.split(r"[\s\-–—|,;()]+", _s(coo_raw)) if t]
     for t in tokens:
@@ -1260,12 +1382,14 @@ def _item_color_code(item_number: str) -> str:
     return ""
 
 
-def _fit_close(product_fit: str) -> tuple[str, str]:
+def _fit_close(product_fit) -> tuple[str, str]:
     """Product Fit → MDD 'Fit LOV' close value; '' when unmappable.
-    '0' / 'N/A' / blank carry no fit information and return ('', '')
-    WITHOUT a warning (source noise, not a mapping gap)."""
-    raw = _s(product_fit).upper().strip()
-    if raw in ("", "0", "N/A", "NA", "NONE"):
+    Official NB principal mapping (Mapping_Apparel.xlsx, BY Fit): N/A
+    explicitly maps to Regular — so the RAW cell is matched here, NOT
+    through _s() (which eats the literal "N/A"). '0' / blank stay skipped
+    WITHOUT a warning (placeholder noise, not listed in the workbook)."""
+    raw = str(product_fit or "").strip().upper()
+    if raw in ("", "0", "0.0"):
         return ("", "")
     return FIT_CLOSE_MAP.get(raw, ("", ""))
 
@@ -1274,11 +1398,19 @@ def _material_triples(target_material: str) -> dict:
     """
     Target Principal Material → (id, value) per LOV family for
     AT_Material / AT_Content / AT_Fabric. Unresolvable families get "".
+    Fabric (Issue #21, 14-10-2026): exact key first, then a weave-token
+    scan so a compound value like "Cotton Jersey" resolves via the word
+    "JERSEY" — compositions with no weave name stay unresolved.
     """
     raw = _s(target_material).upper().strip()
     mat  = MATERIAL_LOV_CLOSE.get(raw, ("", ""))
     cont = CONTENT_LOV_CLOSE.get(raw, ("", ""))
     fab  = FABRIC_LOV_CLOSE.get(raw, ("", ""))
+    if not fab and raw:
+        for token, hit in FABRIC_WEAVE_TOKENS:
+            if re.search(rf"\b{re.escape(token)}\b", raw):
+                fab = hit
+                break
     return {"material": mat, "content": cont, "fabric": fab}
 
 
@@ -1423,7 +1555,9 @@ def map_sku(row: pd.Series, brand_code: str = "NEW") -> dict:
     age_id, age_val, by_age, by_age_id, age_note = _line_plan_to_age(line_plan_biz)
     sports_cat  = _line_plan_to_sports_cat(line_plan_biz)
     coo_id, coo_val = _country_origin_tokens(coo_raw)
-    fit_id, fit_val = _fit_close(product_fit)
+    # RAW cell (not the _s()-filtered product_fit): the official fit map
+    # resolves the literal "N/A" → Regular, which _s() would eat.
+    fit_id, fit_val = _fit_close(row.get("Product Fit"))
     mat_trip = _material_triples(target_mat)
 
     # FOB — Estimated GEP (BM row 60): non-zero floats only
@@ -1540,10 +1674,14 @@ def validate(mapped: dict, mdd: MDDLoader) -> list[str]:
         warns.append(f"[{sku}] Country of origin unresolved from '{mapped['coo_raw']}' — "
                      "AT_CountryOrigin omitted")
     # Issue #18 (30-09-2026): Silhouette must resolve against the MDD LOV or
-    # the COE 60-value fallback, else AT_Silhouette is omitted.
-    if mapped.get("silhouette"):
-        sil_mdd_id  = mdd.lov_id("Silhouette", mapped["silhouette"]) if mdd else ""
-        sil_coe_id  = _silhouette_lov_id(mapped["silhouette"])[1]
+    # the COE 60-value fallback, else AT_Silhouette is omitted. APPAREL ONLY
+    # per the official principal workbook (Mapping_Apparel.xlsx, Z3) — an
+    # ACC Silhouette (e.g. "Socks") is expected not to emit.
+    if mapped.get("silhouette") and _get_division_code(mapped.get("division", "")) == "A":
+        sil_src = SILHOUETTE_CLOSE_MAP.get(_s(mapped["silhouette"]).title(),
+                                           mapped["silhouette"])
+        sil_mdd_id  = mdd.lov_id("Silhouette", sil_src) if mdd else ""
+        sil_coe_id  = _silhouette_lov_id(sil_src)[1]
         if not sil_mdd_id and not sil_coe_id:
             warns.append(f"[{sku}] UNMAPPED Silhouette '{mapped['silhouette']}' — "
                          "AT_Silhouette omitted")
@@ -1559,12 +1697,23 @@ def validate(mapped: dict, mdd: MDDLoader) -> list[str]:
         if not style_hit and _get_division_code(mapped.get("division", "")) == "E":
             warns.append(f"[{sku}] UNMAPPED Detailed Silhouette "
                          f"'{mapped['detailed_silhouette']}' — AT_Style omitted")
-    if mapped.get("target_material") and not mapped.get("material_id"):
+    # Division-scoped close-value warnings (official NB principal workbook,
+    # 14-10-2026): Material is ACC-only, Fabric is APP-only, Fit is
+    # APP-only — a miss outside the attribute's division is expected, not a
+    # mapping gap.
+    _div = _get_division_code(mapped.get("division", ""))
+    if (mapped.get("target_material") and not mapped.get("material_id")
+            and _div == "E"):
         warns.append(f"[{sku}] Material LOV close value unresolved from "
                      "'{mapped['target_material']}' — AT_Material omitted")
-    if mapped.get("product_fit") and not mapped.get("fit_id"):
+    if (mapped.get("target_material") and not mapped.get("fabric_id")
+            and _div == "A"):
+        warns.append(f"[{sku}] Fabric LOV close value unresolved from "
+                     "'{mapped['target_material']}' — AT_Fabric omitted")
+    if (mapped.get("product_fit") and not mapped.get("fit_id")
+            and _div == "A"):
         pf = _s(mapped.get("product_fit")).upper().strip()
-        if pf not in ("0", "N/A", "NA", "NONE"):
+        if pf != "0":
             warns.append(f"[{sku}] Fit close value unresolved from '{mapped['product_fit']}' — "
                          "AT_Fit omitted")
     if mapped.get("sea_intro_raw") is not None and not mapped.get("incoming_month"):
@@ -1781,22 +1930,26 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
         _val(vals_el, "AT_SportsCategoryEN", art["sports_cat"],
              id_val=art["sports_cat_id"])
 
-    # ── Silhouette → AT_Silhouette (LOV ID; BM row 101) ────────────
+    # ── Silhouette → AT_Silhouette (LOV ID; BM row 101) — APPAREL ONLY ──
     # Issue #18 (30-09-2026): the runtime MDD "Silhouette LOV" lookup
-    # resolved nothing in UAT, leaving AT_Silhouette blank. Two causes
-    # fixed here: (a) the MDD sheet stores INTEGER codes, so str(1) = "1"
-    # while the live LOV ID is zero-padded "01" — STIBO discards the
-    # unpadded ID; (b) the COE 60-value export (value → zero-padded ID)
-    # now serves as fallback, with the MDD remaining the primary source
-    # (it is a superset: IDs 61-69 cover S/S Top, Short, Socks, …).
-    if art.get("silhouette"):
-        sil_id = mdd.lov_id("Silhouette", art["silhouette"]) if mdd else ""
+    # resolved nothing in UAT; fixed via zero-padded IDs + the COE 60-value
+    # export as fallback. 14-10-2026: aligned to the official principal
+    # workbook (BY Silhouette — APPAREL ONLY): the NB value first maps
+    # through SILHOUETTE_CLOSE_MAP to the canonical live-LOV name
+    # ("Jacket" → "Jackets", "S/S Top" → "T-Shirt (Short Sleeves)", …),
+    # then resolves against the MDD / COE LOV; unlisted values resolve
+    # directly.
+    div_code = _get_division_code(art.get("product_line", ""))
+    if art.get("silhouette") and div_code == "A":
+        sil_src = SILHOUETTE_CLOSE_MAP.get(_s(art["silhouette"]).title(),
+                                           art["silhouette"])
+        sil_id = mdd.lov_id("Silhouette", sil_src) if mdd else ""
         if sil_id.isdigit():
             sil_id = sil_id.zfill(2)
         if sil_id:
-            _val(vals_el, "AT_Silhouette", art["silhouette"], id_val=sil_id)
+            _val(vals_el, "AT_Silhouette", sil_src, id_val=sil_id)
         else:
-            sil_val, sil_fallback_id = _silhouette_lov_id(art["silhouette"])
+            sil_val, sil_fallback_id = _silhouette_lov_id(sil_src)
             if sil_fallback_id:
                 _val(vals_el, "AT_Silhouette", sil_val, id_val=sil_fallback_id)
             else:
@@ -1805,19 +1958,17 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
                     "omitted", art["silhouette"],
                 )
 
-    # ── Detailed Silhouette → AT_Style (LOV value match, runtime) ──
-    # Issue #19 (02-10/07-10-2026): the strict membership test missed valid
-    # values — the MDD "Style LOV" (single-column, value = ID) carries keys
-    # with trailing spaces ("Bucket ", "Tote ") — leaving AT_Style blank in
-    # UAT. 07-10-2026: _style_close_value() adds the COE-confirmed close
-    # values (Duffel→Duffel Bags, Visor→Visors, Waistpack→Waist Bag,
-    # Sling→Sling Bag, Cap→Baseball Cap, and the sock-cut family
-    # "{Lifestyle|Performance} {No Show|Low Cut|Mid Cut} Socks" keyed on
-    # Silhouette="Socks" + Line Plan Business). The CANONICAL value is
-    # emitted as <Value ID="x">x</Value> (the value IS the ID — no ID
-    # column in the LOV). A miss is warned, never guessed (raw text on a
-    # LOV attribute is discarded by STIBO).
-    if art.get("detailed_silhouette"):
+    # ── Detailed Silhouette → AT_Style (LOV value match) — ACCESSORIES ONLY
+    # Issue #19 (02-10/07-10-2026) + official mapping 14-10-2026: resolved
+    # through _style_close_value() — MDD/COE direct hit, then the official
+    # close-value map (Cap→Snapback Cap, Neck Tube/Scarf→Head Band,
+    # Grip→Gloves, Sackpack→Gym Sack, Hydration Bag→Water Bottles, …) and
+    # the sock-cut family (Crew→Performance High Cut Socks, Quarter→
+    # Performance Mid Cut Socks, No Show/Liner/Low Cut→Performance No Show
+    # Socks). The CANONICAL value is emitted as <Value ID="x">x</Value>
+    # (the value IS the ID). A miss is warned, never guessed. Scope per the
+    # official workbook (AO3): Accessories only.
+    if art.get("detailed_silhouette") and div_code == "E":
         style_canonical = _style_close_value(
             mdd, art["detailed_silhouette"],
             art.get("silhouette", ""), art.get("line_plan_biz", ""),
@@ -1830,29 +1981,39 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
                 "AT_Style omitted", art["detailed_silhouette"],
             )
 
-    # ── Price Segment → BCI (BM row 97; ID best-effort from MDD) ──
-    if art.get("price_segment"):
-        bci_id = mdd.lov_id("BCI", art["price_segment"]) if mdd else ""
-        _val(vals_el, "AT_BCI", art["price_segment"], id_val=bci_id)
+    # ── Price Segment → BCI (BM row 97; official principal mapping) ─
+    # Mapping_Apparel.xlsx (BY BCI — APP and ACC): Best→Best, Better→Image,
+    # Good→Commercial, Value→Commercial. Unlisted values keep the raw text
+    # (best-effort MDD "BCI" ID, usually "" — DEVIATION 5); "0" is skipped.
+    ps_raw = _s(art.get("price_segment")).upper().strip()
+    if ps_raw and ps_raw != "0":
+        bci_val = BCI_CLOSE_MAP.get(ps_raw, art["price_segment"])
+        bci_id = mdd.lov_id("BCI", bci_val) if mdd else ""
+        _val(vals_el, "AT_BCI", bci_val, id_val=bci_id)
 
     # ── Target Principal Material → Content / Fabric / Material ────
-    # Division scoping (COE, UAT issues #20/#22, 07-10-2026):
-    #   AT_Content  — APP only ("tidak ada BY Content untuk Acc": STEP flags
-    #                 a Content value on an Accessories object as invalid)
-    #   AT_Fabric   — APP and ACC (full 43-value LOV, Issue #21)
-    #   AT_Material — ACC only (COE keeps Material empty for Apparel;
-    #                 Issue #20: "Muncul polyester, seharusnya untuk Apparel
-    #                 tidak terisi")
-    div_code = _get_division_code(art.get("product_line", ""))
-    if art.get("content_id") and div_code != "E":
+    # Division scoping per the official NB principal workbook
+    # (Mapping_Apparel.xlsx, Mapping sheet row 3):
+    #   AT_Content  — APPAREL ONLY (AD3; Issue #22, closed 08-10-2026)
+    #   AT_Fabric   — APPAREL ONLY (AH3)
+    #   AT_Material — ACCESSORIES ONLY (AR3 — the COE comment "Muncul
+    #                 polyester, seharusnya untuk Apparel tidak terisi"
+    #                 meant Apparel stays EMPTY; confirmed by the workbook
+    #                 after the 14-10 morning detour that emitted Material
+    #                 for both divisions).
+    # Footwear (any other division) gets none of the three (BM: FTW = N/A).
+    if art.get("content_id") and div_code == "A":
         _val(vals_el, "AT_Content", art["content_val"], id_val=art["content_id"])
-    if art.get("fabric_id"):
+    if art.get("fabric_id") and div_code == "A":
         _val(vals_el, "AT_Fabric",  art["fabric_val"],  id_val=art["fabric_id"])
-    if art.get("material_id") and div_code != "A":
+    if art.get("material_id") and div_code == "E":
         _val(vals_el, "AT_Material", art["material_val"], id_val=art["material_id"])
 
-    # ── Product Fit → AT_Fit (close value) ────────────────────────
-    if art.get("fit_id"):
+    # ── Product Fit → AT_Fit (close value) — APPAREL ONLY ─────────
+    # Official NB principal workbook (Mapping_Apparel.xlsx, BY Fit —
+    # APPAREL ONLY): Standard→Regular, Slim→Fitted, Relaxed/Oversized→
+    # Loose, N/A→Regular.
+    if art.get("fit_id") and div_code == "A":
         _val(vals_el, "AT_Fit", art["fit_val"], id_val=art["fit_id"])
 
     # ── Collections (BM rows 122/123) ─────────────────────────────

@@ -61,9 +61,10 @@ COLUMN → ATTRIBUTE MAP (v2.0 — every column of the 260722 GTM sheet)
       → AT_Gender      (SAP Gender LOV: M/F/U)            [BM row 38]
       → AT_SAPAge      (SAP Age LOV: AD/CH)               [BM row 37]
       → AT_BYGender    (Male / Female / Unisex)           [BM row 96]
-      → AT_BYAge       (Adult / Kids / Grade School / …; COE identity LOV —
-                       value = ID: GRADE SCHOOL / PRESCHOOL / INFANT /
-                       KIDS / ADULT — Issue #25, 14-10-2026)  [BM row 95]
+      → AT_BYAge       (Adult / Kids — every children prefix
+                       Y/G/P/I/N → "Kids" per the COE footwear attribute
+                       mapping, Issue #25 16-10-2026; identity LOV ID:
+                       KIDS / ADULT)                      [BM row 95]
       → AT_EComAgesCategory (A/G/P/I/Y)                   [BM row 132]
       → AT_Fastening   (see _closure_to_fastening)         [BM row 104]
 
@@ -133,15 +134,13 @@ COLUMNS READ BUT *NOT* MAPPED TO STIBO
   never guesses them (v1.0 held the same line, then labelled "MAA asked
   not to send it"; v2.0 keeps them out and cites the spec's "Formula in
   System" typing instead).
-  AT_GenericDescription IS emitted (Issue #21, 02-10-2026; cap corrected
-  #23, 07-10-2026 and re-corrected 14-10-2026): MAA Generic Description
-  Mapping, max 40 characters TOTAL, spaces included — the MDD calculated-
-  attribute spec reads "If total length is greater than 40 chars, truncate
-  'Description' until <=40 chars". The 07-10 excluding-spaces reading let
-  41-56-char values through and STIBO dropped every one of them (UAT
-  14-10-2026: "Masih belum terpopulated"). brand(3) + Principal style +
-  (Age/Gender) + Color (age CH→K / AD→A / AA→O, gender F→W, colour via
-  the AT_TechSAPColorDesc LOV with raw-uppercase fallback).
+  AT_GenericDescription is NOT emitted (removed 19-10-2026, Issue #23):
+  the MDD marks it a CALCULATED attribute ("[Brand Code] || [Description]
+  || ([Age]/[Gender]) || [SAP Color Code] … If total length is greater
+  than 40 chars, truncate 'Description' until <=40 chars") — STEP derives
+  it itself, so a lambda-supplied value is at best redundant and at worst
+  discarded (UAT 08-10/16-10-2026). The 02-10 emission and both cap
+  re-measurements (07-10 non-space, 14-10 total-length) are history.
 
 ────────────────────────────────────────────────────────────────────
 DEVIATIONS (documented, deliberate)
@@ -238,10 +237,8 @@ SOURCE_COLUMNS: dict[str, list[str]] = {
     # Number to Item Number (BM template & v6 updated). Product Number now
     # only feeds the <Name>/description fallback.
     "Product Number":                    ["<Name>/AT_PrincipalStyleDescription fallback"],
-    "Short Product Description":         ["AT_PrincipalStyleDescription", "<Name>",
-                                          "AT_GenericDescription (style part)"],
-    "Colorway Name":                     ["AT_PrincipalColorName",
-                                          "AT_GenericDescription (color part)"],
+    "Short Product Description":         ["AT_PrincipalStyleDescription", "<Name>"],
+    "Colorway Name":                     ["AT_PrincipalColorName"],
     "Adult Gender/ Kids Closure Type":   ["AT_PrincipalGenderDescription",
                                           "AT_Fastening (children branch)",
                                           "AT_Gender/AT_SAPAge fallback"],
@@ -299,13 +296,15 @@ LOV_GENDER = {"Male": "M", "Female": "F", "Unisex": "U"}
 # MDD "Age LOV" — SAP Age (value → ID)
 LOV_SAP_AGE = {"Adults": "AD", "Children": "CH", "All Ages": "AA"}
 
-# ── Issue #25 (14-10-2026): AT_BYAge — COE "BY Age" LOV, value = ID ──────────
-# Adult→ADULT, All Ages→ALL AGES, Grade School→GRADE SCHOOL, Infant→INFANT,
-# Kids→KIDS, Preschool→PRESCHOOL. Resolved from the ITEM_PREFIX_PROFILE
-# "by_age" value, NOT from the SAP age id: the previous age_id-keyed table
-# (AD→ADULT, CH→KIDS, …) collapsed every children profile to KIDS, so G/P/I
-# item numbers carried the wrong LOV ID and STIBO dropped AT_BYAge
-# ("For FTW with 1st digits Number: P, I, G still fail" — UAT 14-10-2026).
+# ── Issue #25 (14-10-2026; value rule corrected 16-10-2026): AT_BYAge ────────
+# COE "BY Age" LOV, value = ID: Adult→ADULT, All Ages→ALL AGES, Grade
+# School→GRADE SCHOOL, Infant→INFANT, Kids→KIDS, Preschool→PRESCHOOL.
+# Resolved from the ITEM_PREFIX_PROFILE "by_age" value, NOT from the SAP
+# age id (the original age_id-keyed table collapsed every children profile
+# to KIDS via the wrong route and STIBO dropped the attribute). Per the
+# COE footwear attribute mapping the NB children prefixes (Y/G/P/I/N) all
+# carry by_age "Kids" → KIDS; the granular LOV entries are kept only as
+# documentation of the live LOV.
 BY_AGE_LOV_ID: dict[str, str] = {
     "Adult":        "ADULT",
     "All Ages":     "ALL AGES",
@@ -432,6 +431,11 @@ LOV_ECOM_AGES = {
 # M = Men, W = Women, U = Unisex (adult); Y = Youth; G = Grade School;
 # P = Preschool; I = Infant; N = NB kids line (grade-school sizing,
 # e.g. NW574/NW327 — kids Lifestyle/Performance products).
+# BY AGE (Issue #25, COE retest 16-10-2026): EVERY children prefix maps to
+# the BY Age value "Kids" — "1st digits Number P/G/I … Expected result:
+# based on mapping is Kids" (the earlier Preschool/Grade School/Infant BY
+# values were rejected by the COE). The granular age grades still flow to
+# AT_EComAgesCategory (A/G/P/I/Y). SAP Age stays Children (CH) for all.
 # Fields: sap_gender_id, sap_gender_val, sap_age_id, sap_age_val,
 #         by_gender, by_age, ecom_age_val
 ITEM_PREFIX_PROFILE: dict[str, dict] = {
@@ -444,11 +448,11 @@ ITEM_PREFIX_PROFILE: dict[str, dict] = {
     "Y": {"gender_id": "U", "gender_val": "Unisex", "age_id": "CH", "age_val": "Children",
           "by_gender": "Unisex", "by_age": "Kids",         "ecom_age": "Youth"},
     "G": {"gender_id": "U", "gender_val": "Unisex", "age_id": "CH", "age_val": "Children",
-          "by_gender": "Unisex", "by_age": "Grade School", "ecom_age": "Grade School"},
+          "by_gender": "Unisex", "by_age": "Kids",         "ecom_age": "Grade School"},
     "P": {"gender_id": "U", "gender_val": "Unisex", "age_id": "CH", "age_val": "Children",
-          "by_gender": "Unisex", "by_age": "Preschool",    "ecom_age": "Play School / Pre School"},
+          "by_gender": "Unisex", "by_age": "Kids",         "ecom_age": "Play School / Pre School"},
     "I": {"gender_id": "U", "gender_val": "Unisex", "age_id": "CH", "age_val": "Children",
-          "by_gender": "Unisex", "by_age": "Infant",       "ecom_age": "Infant"},
+          "by_gender": "Unisex", "by_age": "Kids",         "ecom_age": "Infant"},
     "N": {"gender_id": "U", "gender_val": "Unisex", "age_id": "CH", "age_val": "Children",
           "by_gender": "Unisex", "by_age": "Kids",         "ecom_age": "Grade School"},
 }
@@ -1009,93 +1013,15 @@ def _build_generic_code(brand_code: str, item_number: str) -> str:
     return f"{brand}{base}"
 
 
-# ── Generic Description (Issue #21, 02-10-2026; cap corrected #23) ──────────
-# MAA Generic Description Mapping, "Max 40 Digits": 3-digit brand code +
-# Principal style + (Age/Gender) + Color. The MDD calculated-attribute spec
-# caps the WHOLE string — "If total length is greater than 40 chars,
-# truncate 'Description' until <=40 chars" — spaces included. The 07-10-
-# 2026 retest had switched the measure to non-space characters; the 14-10-
-# 2026 UAT disproved that (41/48-char values were flagged "Panjang kalimat
-# lebih dari 40 Digits", and every emitted 41-56-char value failed to
-# populate: "Masih belum terpopulated"), so plain len() is the measuring
-# stick again — identical to the sample modules.
-MAX_GENERIC_DESC_LEN = 40
-
-# Age / gender labels follow the STEP Generic Description derive
-# ("mapping awal"): IF SAPAge = 'CH' → 'K', 'AD' → 'A', 'AA' → 'O';
-# IF Gender = 'F' → 'W' (Womens). M / U pass through unchanged.
-GENERIC_DESC_AGE_LABEL: dict[str, str] = {
-    "AD": "A",   # Adults
-    "CH": "K",   # Children → K (Kids)
-    "AA": "O",   # All Ages
-}
-
-GENERIC_DESC_GENDER_LABEL: dict[str, str] = {
-    "F": "W",    # Female → W (Womens); M / U pass through
-}
-
-# AT_TechSAPColorDesc LOV — the LOV the STEP Generic Description derive
-# reads (exported from the STEP Workbench on 2026-09-22; keys are SAP
-# colour names, A-Z0-9 normalised; RED stays RED because the Workbench LOV
-# spells it that way).
-TECH_SAP_COLOR_ID: dict[str, str] = {
-    "BLACK": "BLK", "WHITE": "WHT", "GREY": "GRY", "BLUE": "BLU",
-    "GREEN": "GRN", "RED": "RED", "BEIGE": "BEG", "BROWN": "BRN",
-    "YELLOW": "YLW", "ORANGE": "ORG", "PINK": "PNK", "PURPLE": "PUR",
-    "NOCOLOR": "NOO",
-}
-
-
-def _tech_sap_color_id(sap_color_name: str) -> str:
-    """SAP colour name → AT_TechSAPColorDesc LOV id ('' when unmapped)."""
-    key = re.sub(r"[^A-Z0-9]", "", str(sap_color_name or "").upper())
-    return TECH_SAP_COLOR_ID.get(key, "")
-
-
-def _build_generic_description(
-    brand_code: str, style_desc: str,
-    age_code: str, gender_code: str, sap_color_name: str,
-) -> str:
-    """
-    MAA Generic Description Mapping — max 40 characters TOTAL, spaces
-    included ("If total length is greater than 40 chars, truncate
-    'Description' until <=40 chars" — MDD calculated-attribute spec;
-    Issue #23, 14-10-2026): 3-digit brand code + Principal style +
-    (Age/Gender) + Color.
-
-    Verbatim replica of inline_sample_apparel_main._build_generic_description:
-    - Age / gender labels follow the STEP derive ("mapping awal"):
-      GENERIC_DESC_AGE_LABEL CH→K, AD→A, AA→O and gender F→W.
-    - Color uses the AT_TechSAPColorDesc LOV id via _tech_sap_color_id
-      (e.g. NO COLOR → NOO, RED → RED); unmapped names fall back to the
-      raw text uppercased (a GTM colourway like "RICH OAK / CASTLEROCK"
-      is not a SAP family name and takes the fallback).
-    When the value exceeds 40 characters the Principal style is cut to the
-    remaining budget and backed off to a whole-word boundary — never a
-    partial word (UAT issue #23, 14-10-2026, 48 chars):
-      "NEW Trail Windproof Packable Jacket (A/M) ANGORA"
-      → "NEW Trail Windproof (A/M) ANGORA"
-    A window with no complete word (single-token style) falls back to the
-    hard cut on the final join so the cap is never exceeded.
-    """
-    age_label_desc = GENERIC_DESC_AGE_LABEL.get(age_code, age_code)
-    gender_label   = GENERIC_DESC_GENDER_LABEL.get(gender_code, gender_code)
-    age_gender     = f"({age_label_desc}/{gender_label})" if age_code and gender_code else ""
-    color_desc     = _tech_sap_color_id(sap_color_name) or (sap_color_name or "").strip().upper()
-    prefix = _s(brand_code)[:3]
-    suffix = " ".join(p for p in (age_gender, color_desc) if p)
-    style  = (style_desc or "").strip()
-    result = " ".join(p for p in (prefix, style, suffix) if p)
-    if len(result) <= MAX_GENERIC_DESC_LEN:
-        return result
-    fixed_len  = len(prefix) + (1 if prefix else 0) + len(suffix) + (1 if suffix else 0)
-    avail      = MAX_GENERIC_DESC_LEN - fixed_len
-    style_cut  = style[:max(0, avail)]
-    if len(style_cut) < len(style) and style[len(style_cut)] != " ":
-        head, sep, _ = style_cut.rpartition(" ")
-        style_cut = head if sep else style_cut
-    style_trim = style_cut.rstrip()
-    return " ".join(p for p in (prefix, style_trim, suffix) if p)[:MAX_GENERIC_DESC_LEN]
+# ── AT_GenericDescription REMOVED (Issue #23, 19-10-2026) ────────────────────
+# The MDD marks Generic Description as a CALCULATED attribute ("This is a
+# description of the article, calculated by concatenating other attributes:
+# [Brand Code] || [Description] || ([Age]/[Gender]) || [SAP Color Code]").
+# STEP derives it itself, so the lambda no longer sets it — every value we
+# sent was either discarded (>40 chars) or overwrote nothing useful
+# (UAT 08-10/16-10-2026: "Masih belum terpopulated" / "Failed"). The
+# _build_generic_description machinery (40-char cap, age/gender labels,
+# AT_TechSAPColorDesc colour map) was removed with it.
 
 
 def map_sku(row: pd.Series, brand_code: str = "NEW") -> dict:
@@ -1240,8 +1166,11 @@ def _log_dropped_attributes(mdd: MDDLoader) -> list[str]:
         "AT_SAPStyleCode / AT_Generic / AT_Variant / "
         "AT_VariantDescription":
             "BM rows 22-26 'Formula in System' — computed downstream from the BY "
-            "SAP colour/size response; never guessed here. (AT_GenericDescription "
-            "IS emitted since Issue #21, 02-10-2026 — sample-module replica.)",
+            "SAP colour/size response; never guessed here.",
+        "AT_GenericDescription":
+            "CALCULATED in STEP ([Brand Code] || [Description] || "
+            "([Age]/[Gender]) || [SAP Color Code], truncate >40 chars) — "
+            "lambda no longer sets it (Issue #23, removed 19-10-2026).",
     }
     for at_id, why in dropped.items():
         card = (mdd.attributes.get(at_id, {}).get("cardinality") or "n/a").strip() if mdd else "n/a"
@@ -1335,7 +1264,6 @@ EMITTED_ATTRIBUTE_IDS: list[str] = [
     "AT_MaterialUpper", "AT_Fastening", "AT_IncomingMonth",
     "AT_MaterialType", "AT_SAPArticleCategory", "AT_BYArticleType",
     "AT_SAPProductFlag", "AT_UOM", "AT_ArticleStatus",
-    "AT_GenericDescription",                 # Issue #21 — 02-10-2026
 ]
 
 
@@ -1366,15 +1294,9 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
     _val(vals_el, "AT_PrincipalStyleDescription",
          art["short_desc"] or art["item_number"])
 
-    # ── Generic Description (Issue #21, 02-10-2026) ───────────────
-    # MAA mapping, max 40 chars: brand(3) + Principal style + (Age/Gender)
-    # + Color — exact replica of the sample modules' implementation.
-    _val(vals_el, "AT_GenericDescription", _build_generic_description(
-        art["brand_code"], art["short_desc"] or art["item_number"],
-        art["age_id"], art["gender_id"], art["colorway"],
-    ))
-
     # ── Colorway Name minus the Item Number prefix (BM row 16) ────
+    # (AT_GenericDescription is NOT emitted here — calculated in STEP,
+    # see the removal note above.)
     _val(vals_el, "AT_PrincipalColorName", art["colorway"])
 
     # ── Adult Gender/ Kids Closure Type (BM row 18) — plain text ──

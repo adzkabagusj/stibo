@@ -173,12 +173,10 @@ COLUMNS READ BUT *NOT* MAPPED TO STIBO
     AT_VariantDescription — BM rows 22-26 "Formula in System" ("Type C"),
                       computed downstream from the BY SAP colour/size
                       response; never guessed here. AT_GenericDescription
-                      IS emitted (Issue #21, 02-10-2026; cap re-measured on
-                      TOTAL length incl. spaces 14-10-2026, Issue #23):
-                      MAA Generic Description Mapping, max 40 chars —
-                      brand(3) + Principal style + (Age/Gender) + Color —
-                      an exact replica of the sample modules'
-                      implementation.
+                      is NOT emitted either (removed 19-10-2026, Issue
+                      #23): the MDD marks it a CALCULATED attribute —
+                      STEP derives it itself, so the lambda no longer
+                      sets it.
 
 ────────────────────────────────────────────────────────────────────
 DEVIATIONS (documented, deliberate)
@@ -276,11 +274,9 @@ SHEET_NAME_FALLBACKS = ["APPACC", "APP ACC", "Preline", "Linelist", "Sheet1"]
 # ══════════════════════════════════════════════════════════════════
 SOURCE_COLUMNS: dict[str, list[str]] = {
     "Product Number":              ["AT_PrincipalStyleCode"],
-    "Product Display Name":        ["AT_PrincipalStyleDescription", "<Name>",
-                                     "AT_GenericDescription (style part)"],
+    "Product Display Name":        ["AT_PrincipalStyleDescription", "<Name>"],
     "Item Number":                 ["AT_PrincipalColorCode", "AT_InboundGenericCode"],
-    "Color Code - Non-Footwear":   ["AT_PrincipalColorName",
-                                     "AT_GenericDescription (color part)"],
+    "Color Code - Non-Footwear":   ["AT_PrincipalColorName"],
     "Gender Duty - Non-Footwear":  ["AT_PrincipalGenderDescription",
                                     "AT_Gender", "AT_BYGender"],
     "Global Size Offering":        ["AT_PrincipalSize"],
@@ -668,27 +664,28 @@ def _style_close_value(
 ) -> str:
     """
     Issue #19 (07-10-2026; aligned to the official principal mapping
-    14-10-2026): full Detailed Silhouette → AT_Style resolution.
-    Precedence: MDD "Style LOV" (normalized) → COE export (normalized) →
-    official close-value map above → sock-cut family. Returns the canonical
-    LOV value ('' when unmatched — caller warns, never guesses raw text).
+    14-10-2026; precedence hardened 19-10-2026 after COE retest "Style nya
+    masih gak muncul, Detailed Silhouette 'Crew'"): Detailed Silhouette →
+    AT_Style resolution. Precedence: OFFICIAL close-value map first
+    (STYLE_CLOSE_ALIAS — the principal's mapping wins over any future MDD
+    revision, e.g. Crew → Performance High Cut Socks), then the sock-cut
+    family (STYLE_SOCK_CUT_TO_LOV, Silhouette == "Socks"), then the MDD
+    "Style LOV" / COE export direct hit. Returns the canonical LOV value
+    ('' when unmatched — caller warns, never guesses raw text).
     (line_plan_biz is kept in the signature for compatibility; the official
     mapping no longer keys the sock family on it.)
     """
     raw = _s(detailed_silhouette)
     if not raw:
         return ""
-    direct = (mdd.normalized_lookup("Style", raw) if mdd else "") or _style_lov_value(raw)
-    if direct:
-        return direct
-    alias = STYLE_CLOSE_ALIAS.get(_s(raw).title(), "")
+    alias = STYLE_CLOSE_ALIAS.get(raw.title(), "")
     if alias and _style_lov_value(alias):
         return _style_lov_value(alias)
     if _s(silhouette).upper().strip() == "SOCKS":
-        cand = STYLE_SOCK_CUT_TO_LOV.get(_s(raw).title(), "")
+        cand = STYLE_SOCK_CUT_TO_LOV.get(raw.title(), "")
         if cand and _style_lov_value(cand):
             return cand
-    return ""
+    return (mdd.normalized_lookup("Style", raw) if mdd else "") or _style_lov_value(raw)
 
 # ── Line Plan Business → Sports Category (BM row 121, verbatim) ─────────────
 LOV_LINE_PLAN_TO_SPORTS_CAT: dict[str, str] = {
@@ -1434,99 +1431,16 @@ def _build_generic_code(brand_code: str, item_number: str) -> str:
     return f"{brand}{base}"
 
 
-# ── Generic Description (Issue #21, 02-10-2026; cap corrected #23) ──────────
-# MAA Generic Description Mapping, "Max 40 Digits": 3-digit brand code +
-# Principal style + (Age/Gender) + Color. The MDD calculated-attribute spec
-# caps the WHOLE string — "If total length is greater than 40 chars,
-# truncate 'Description' until <=40 chars" — spaces included. The 07-10-
-# 2026 retest had switched the measure to non-space characters; the 14-10-
-# 2026 UAT disproved that (41/48-char values were flagged "Panjang kalimat
-# lebih dari 40 Digits", and every emitted 41-56-char value failed to
-# populate: "Masih belum terpopulated"), so plain len() is the measuring
-# stick again — identical to the sample modules.
-MAX_GENERIC_DESC_LEN = 40
-
-# Age / gender labels follow the STEP Generic Description derive
-# ("mapping awal"): IF SAPAge = 'CH' → 'K', 'AD' → 'A', 'AA' → 'O';
-# IF Gender = 'F' → 'W' (Womens). M / U pass through unchanged.
-GENERIC_DESC_AGE_LABEL: dict[str, str] = {
-    "AD": "A",   # Adults
-    "CH": "K",   # Children → K (Kids)
-    "AA": "O",   # All Ages
-}
-
-GENERIC_DESC_GENDER_LABEL: dict[str, str] = {
-    "F": "W",    # Female → W (Womens); M / U pass through
-}
-
-# AT_TechSAPColorDesc LOV — the LOV the STEP Generic Description derive
-# reads (exported from the STEP Workbench on 2026-09-22; keys are SAP
-# colour names, A-Z0-9 normalised; RED stays RED because the Workbench LOV
-# spells it that way).
-TECH_SAP_COLOR_ID: dict[str, str] = {
-    "BLACK": "BLK", "WHITE": "WHT", "GREY": "GRY", "BLUE": "BLU",
-    "GREEN": "GRN", "RED": "RED", "BEIGE": "BEG", "BROWN": "BRN",
-    "YELLOW": "YLW", "ORANGE": "ORG", "PINK": "PNK", "PURPLE": "PUR",
-    "NOCOLOR": "NOO",
-}
-
-
-def _tech_sap_color_id(sap_color_name: str) -> str:
-    """SAP colour name → AT_TechSAPColorDesc LOV id ('' when unmapped)."""
-    key = re.sub(r"[^A-Z0-9]", "", str(sap_color_name or "").upper())
-    return TECH_SAP_COLOR_ID.get(key, "")
-
-
-def _color_family_name(color_name: str) -> str:
-    """Strip the trailing vendor code from the preline colour column —
-    "BLACK (BK)" → "BLACK" — so the family name resolves in
-    TECH_SAP_COLOR_ID ("BLACK(BK)" normalised would miss)."""
-    return re.sub(r"\s*\([^)]*\)\s*$", "", (color_name or "").strip()).strip()
-
-
-def _build_generic_description(
-    brand_code: str, style_desc: str,
-    age_code: str, gender_code: str, sap_color_name: str,
-) -> str:
-    """
-    MAA Generic Description Mapping — max 40 characters TOTAL, spaces
-    included ("If total length is greater than 40 chars, truncate
-    'Description' until <=40 chars" — MDD calculated-attribute spec;
-    Issue #23, 14-10-2026): 3-digit brand code + Principal style +
-    (Age/Gender) + Color.
-
-    Verbatim replica of inline_sample_apparel_main._build_generic_description:
-    - Age / gender labels follow the STEP derive ("mapping awal"):
-      GENERIC_DESC_AGE_LABEL CH→K, AD→A, AA→O and gender F→W.
-    - Color uses the AT_TechSAPColorDesc LOV id via _tech_sap_color_id
-      (e.g. NO COLOR → NOO, RED → RED); unmapped names fall back to the
-      raw text uppercased.
-    When the value exceeds 40 characters the Principal style is cut to the
-    remaining budget and backed off to a whole-word boundary — never a
-    partial word (UAT issue #23, 14-10-2026, 48 chars):
-      "NEW Trail Windproof Packable Jacket (A/M) ANGORA"
-      → "NEW Trail Windproof (A/M) ANGORA"
-    A window with no complete word (single-token style) falls back to the
-    hard cut on the final join so the cap is never exceeded.
-    """
-    age_label_desc = GENERIC_DESC_AGE_LABEL.get(age_code, age_code)
-    gender_label   = GENERIC_DESC_GENDER_LABEL.get(gender_code, gender_code)
-    age_gender     = f"({age_label_desc}/{gender_label})" if age_code and gender_code else ""
-    color_desc     = _tech_sap_color_id(sap_color_name) or (sap_color_name or "").strip().upper()
-    prefix = _s(brand_code)[:3]
-    suffix = " ".join(p for p in (age_gender, color_desc) if p)
-    style  = (style_desc or "").strip()
-    result = " ".join(p for p in (prefix, style, suffix) if p)
-    if len(result) <= MAX_GENERIC_DESC_LEN:
-        return result
-    fixed_len  = len(prefix) + (1 if prefix else 0) + len(suffix) + (1 if suffix else 0)
-    avail      = MAX_GENERIC_DESC_LEN - fixed_len
-    style_cut  = style[:max(0, avail)]
-    if len(style_cut) < len(style) and style[len(style_cut)] != " ":
-        head, sep, _ = style_cut.rpartition(" ")
-        style_cut = head if sep else style_cut
-    style_trim = style_cut.rstrip()
-    return " ".join(p for p in (prefix, style_trim, suffix) if p)[:MAX_GENERIC_DESC_LEN]
+# ── AT_GenericDescription REMOVED (Issue #23, 19-10-2026) ────────────────────
+# The MDD marks Generic Description as a CALCULATED attribute ("This is a
+# description of the article, calculated by concatenating other attributes:
+# [Brand Code] || [Description] || ([Age]/[Gender]) || [SAP Color Code]").
+# STEP derives it itself, so the lambda no longer sets it — every value we
+# sent was either discarded (>40 chars) or overwrote nothing useful
+# (UAT 08-10/16-10-2026: "Masih belum terpopulated" / "Failed"). The
+# _build_generic_description machinery (40-char cap, age/gender labels,
+# AT_TechSAPColorDesc colour map, colour vendor-code strip) was removed
+# with it.
 
 
 def map_sku(row: pd.Series, brand_code: str = "NEW") -> dict:
@@ -1745,8 +1659,8 @@ def _log_dropped_attributes(mdd: MDDLoader) -> list[str]:
         "AT_VariantDescription":
             "BM rows 22-26 'Formula in System' (Type C) — computed downstream "
             "from the BY SAP colour/size response; never guessed here. "
-            "(AT_GenericDescription IS emitted since Issue #21, 02-10-2026 — "
-            "sample-module replica.)",
+            "(AT_GenericDescription removed 19-10-2026, Issue #23 — "
+            "calculated in STEP.)",
     }
     for at_id, why in dropped.items():
         card = (mdd.attributes.get(at_id, {}).get("cardinality") or "n/a").strip() if mdd else "n/a"
@@ -1845,7 +1759,6 @@ EMITTED_ATTRIBUTE_IDS: list[str] = [
     "AT_LaunchingDate", "AT_IncomingMonth",
     "AT_MaterialType", "AT_SAPArticleCategory", "AT_BYArticleType",
     "AT_SAPProductFlag", "AT_UOM", "AT_ArticleStatus",
-    "AT_GenericDescription",                 # Issue #21 — 02-10-2026
 ]
 
 
@@ -1875,15 +1788,8 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
     _val(vals_el, "AT_PrincipalColorCode",        art["color_code"])
     _val(vals_el, "AT_PrincipalColorName",        art["color_name"])
 
-    # ── Generic Description (Issue #21, 02-10-2026) ───────────────
-    # MAA mapping, max 40 chars: brand(3) + Principal style + (Age/Gender)
-    # + Color — exact replica of the sample modules' implementation. The
-    # colour family is the Color Code - Non-Footwear text minus its vendor
-    # code ("BLACK (BK)" → "BLACK" → BLK).
-    _val(vals_el, "AT_GenericDescription", _build_generic_description(
-        art["brand_code"], art["display_name"] or art["item_number"],
-        art["age_id"], art["gender_id"], _color_family_name(art["color_name"]),
-    ))
+    # (AT_GenericDescription is NOT emitted — calculated in STEP, see the
+    # removal note above.)
 
     # ── Gender Duty - Non-Footwear (BM rows 18/38/96) ─────────────
     gender_max = MAX_GENDER_DESC_CHARS

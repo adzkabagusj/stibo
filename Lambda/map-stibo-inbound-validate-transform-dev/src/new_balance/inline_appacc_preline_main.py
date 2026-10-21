@@ -573,8 +573,9 @@ SILHOUETTE_CLOSE_MAP: dict[str, str] = {
 }
 
 # ── Issue #19 (02-10-2026): AT_Style LOV — COE export 02-10-2026 ─────────────
-# Single-column LOV: no ID column, so the VALUE IS THE ID (same convention
-# as the Franchise LOV — by_inbound.py). Emitted as <Value ID="x">x</Value>.
+# Single-column LOV: no ID column, so the value is matched on its display
+# text alone. Emitted as PLAIN TEXT with no ID attribute
+# (<Value AttributeID="AT_Style">x</Value> — COE, 19-10-2026).
 # Accessories-only: apparel Detailed Silhouettes (e.g. "Shorts") have no
 # entry and are warned + omitted until the STEP LOV is extended. The MDD
 # "Style LOV" sheet mirrors this list (with trailing-space quirks like
@@ -611,7 +612,8 @@ _STYLE_NORM_INDEX: dict[str, str] = {
 
 def _style_lov_value(value: str) -> str:
     """Resolve a Detailed Silhouette source value against the COE Style LOV.
-    Returns the canonical value ('' when unmatched) — value IS the ID."""
+    Returns the canonical value ('' when unmatched) — emitted as plain
+    text, no ID attribute."""
     raw = (value or "").strip()
     if not raw:
         return ""
@@ -1866,21 +1868,24 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
 
     # ── Detailed Silhouette → AT_Style (LOV value match) — ACCESSORIES ONLY
     # Issue #19 (02-10/07-10-2026) + official mapping 14-10-2026: resolved
-    # through _style_close_value() — MDD/COE direct hit, then the official
-    # close-value map (Cap→Snapback Cap, Neck Tube/Scarf→Head Band,
-    # Grip→Gloves, Sackpack→Gym Sack, Hydration Bag→Water Bottles, …) and
-    # the sock-cut family (Crew→Performance High Cut Socks, Quarter→
-    # Performance Mid Cut Socks, No Show/Liner/Low Cut→Performance No Show
-    # Socks). The CANONICAL value is emitted as <Value ID="x">x</Value>
-    # (the value IS the ID). A miss is warned, never guessed. Scope per the
-    # official workbook (AO3): Accessories only.
+    # through _style_close_value() — the official close-value map first
+    # (Cap→Snapback Cap, Neck Tube/Scarf→Head Band, Grip→Gloves, Sackpack→
+    # Gym Sack, Hydration Bag→Water Bottles, …), then the sock-cut family
+    # (Crew→Performance High Cut Socks, Quarter→Performance Mid Cut Socks,
+    # No Show/Liner/Low Cut→Performance No Show Socks), then the MDD/COE
+    # direct hit. The CANONICAL value is emitted as PLAIN TEXT with no ID
+    # attribute (<Value AttributeID="AT_Style">x</Value> — COE, 19-10-
+    # 2026). A miss is warned, never guessed. Scope per the official
+    # workbook (AO3): Accessories only.
     if art.get("detailed_silhouette") and div_code == "E":
         style_canonical = _style_close_value(
             mdd, art["detailed_silhouette"],
             art.get("silhouette", ""), art.get("line_plan_biz", ""),
         )
         if style_canonical:
-            _val(vals_el, "AT_Style", style_canonical, id_val=style_canonical)
+            # 19-10-2026 (COE): plain text, NO ID attribute — the value
+            # resolves in the Style LOV by its display value alone.
+            _val(vals_el, "AT_Style", style_canonical)
         else:
             log.warning(
                 "Detailed Silhouette '%s' not in the Style LOV — "

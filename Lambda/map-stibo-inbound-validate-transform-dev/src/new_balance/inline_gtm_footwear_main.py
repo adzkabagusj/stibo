@@ -168,6 +168,19 @@ DEVIATIONS (documented, deliberate)
     real LOV ID (Material - Upper, Fastening, Country Origin); a miss is
     skipped with a warning — writing raw text to a LOV attribute throws
     "Illegal LOV" on STEP import (lesson recorded in reebok/article_master_*).
+ 6. LOV attributes are emitted ID-ONLY (21-10-2026): whenever a LOV ID
+    resolves, the <Value> element carries the ID attribute and no text
+    (<Value AttributeID="AT_Gender" ID="M"/>) — STIBO resolves the display
+    value from the LOV ID itself. Implemented once in the _val() helper,
+    so every emission site follows the same rule (same change as the
+    App/Acc Preline ETL, DEVIATION 7 there). Unaffected: the plain-text
+    attributes with no LOV ID — AT_PrincipalStyleCode /
+    AT_PrincipalStyleDescription / AT_PrincipalColorName /
+    AT_PrincipalGenderDescription / AT_PrincipalSize, hierarchy L1-L3,
+    AT_Collection1/2, AT_IncomingMonth, AT_SeasonYear, AT_ArticleStatus,
+    AT_InboundGenericCode. (This flow emits no AT_Style — the text-only
+    LOV exception of the App/Acc flow — since BM row 101 pins Footwear
+    Silhouette as Manual Input.)
 """
 
 import re
@@ -1205,9 +1218,12 @@ def _val(parent, attr_id, value="", id_val=""):
     el = ET.SubElement(parent, f"{{{STIBO_NS}}}Value")
     el.set("AttributeID", attr_id)
     if normalized_id:
+        # LOV attributes are emitted ID-ONLY (DEVIATION 6, 21-10-2026):
+        # STIBO resolves the display value from the LOV ID itself, so the
+        # text node beside the ID is redundant. The text-only form is
+        # reserved for attributes with no LOV ID (the AT_Principal* set
+        # and every other non-LOV text attribute).
         el.set("ID", normalized_id)
-        if normalized_value:
-            el.text = normalized_value
         return el
     el.text = normalized_value
     return el

@@ -210,6 +210,17 @@ DEVIATIONS (documented, deliberate)
  6. FOB (Estimated GEP) is emitted for non-zero values only; the 27 zero /
     blank rows are omitted and reported (a FOB of 0 would price the
     article wrongly).
+ 7. LOV attributes are emitted ID-ONLY (21-10-2026): whenever a LOV ID
+    resolves, the <Value> element carries the ID attribute and no text
+    (<Value AttributeID="AT_Gender" ID="M"/>) — STIBO resolves the display
+    value from the LOV ID itself. Implemented once in the _val() helper,
+    so every emission site follows the same rule. Unaffected: plain-text
+    attributes with no LOV ID — AT_Style (COE 19-10-2026: resolves by
+    display value alone, no ID attribute) and AT_BCI when its ID fails to
+    resolve (DEVIATION 5) — keep the text-only form, as do the non-LOV
+    text attributes (AT_Principal*, hierarchy L1-L5, AT_Collection1/2,
+    AT_LaunchingDate / AT_IncomingMonth, AT_FOB, AT_TechnologyUsed,
+    AT_SeasonYear, AT_ArticleStatus, AT_InboundGenericCode).
 """
 
 import re
@@ -1697,9 +1708,12 @@ def _val(parent, attr_id, value="", id_val=""):
     el = ET.SubElement(parent, f"{{{STIBO_NS}}}Value")
     el.set("AttributeID", attr_id)
     if normalized_id:
+        # LOV attributes are emitted ID-ONLY (DEVIATION 7, 21-10-2026):
+        # STIBO resolves the display value from the LOV ID itself, so the
+        # text node beside the ID is redundant. The text-only form is
+        # reserved for attributes with no LOV ID (AT_Style — and AT_BCI
+        # whenever its ID fails to resolve, DEVIATION 5).
         el.set("ID", normalized_id)
-        if normalized_value:
-            el.text = normalized_value
         return el
     el.text = normalized_value
     return el

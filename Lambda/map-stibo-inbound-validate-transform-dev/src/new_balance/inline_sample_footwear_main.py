@@ -267,7 +267,7 @@ MAX_GENERIC_LEN           = 12   # 3 brand + 1 "S" + 8 style
 MAX_VARIANT_LEN           = 18   # generic + 3 color + 3 size
 MAX_GENERIC_DESC_LEN      = 40
 MAX_VARIANT_DESC_LEN      = 40
-MAX_GENDER_DESC_CHARS     = 10   # MDD AT_PrincipalGenderDescription
+MAX_GENDER_DESC_CHARS     = 20   # AT_PrincipalGenderDescription — hardcoded: Workbench says 20, MDD sheet stale at 10
 
 # ── Generic Description age / gender labels (Issue #8, 28-09-2026) ──────────
 # Aligned with the STEP Generic Description derive ("mapping awal"):
@@ -918,9 +918,11 @@ def _add_generic_values(vals_el, art, brand_name, comp_code, sbu, mdd=None, bm=N
     _val(vals_el, "AT_PrincipalColorName", art["nrf_color"])
 
     # ── Gender / age (footwear — from Size Profile) ────────────────
-    gender_max = mdd.max_chars("AT_PrincipalGenderDescription", MAX_GENDER_DESC_CHARS) if mdd \
-        else MAX_GENDER_DESC_CHARS
-    _val(vals_el, "AT_PrincipalGenderDescription", art["size_profile"][:gender_max])
+    # Hardcoded at MAX_GENDER_DESC_CHARS (20, per STEP Workbench). The MDD
+    # sheet still declares 10 for this attribute, so mdd.max_chars() must
+    # not be consulted here.
+    _val(vals_el, "AT_PrincipalGenderDescription",
+         art["size_profile"][:MAX_GENDER_DESC_CHARS])
     _val(vals_el, "AT_Gender", art["gender_label"], id_val=art["gender_code"])
     _val(vals_el, "AT_SAPAge",  art["age_label"],  id_val=art["age_code"])
 
